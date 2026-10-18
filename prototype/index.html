@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grab — Panel Prototype</title>
+<style>
+  :root {
+    --page: #111;
+    --bg: #1e1e1e;
+    --bg-2: #262626;
+    --bg-3: #313131;
+    --line: #383838;
+    --text: #e6e6e6;
+    --muted: #a0a0a0;
+    --dim: #6f6f6f;
+    --accent: #4a9df8;
+    --accent-2: #2f86ec;
+    --ok: #3fb97a;
+    --warn: #e8a33d;
+    --err: #e5584f;
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--page); color: var(--text);
+    font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* ---------- Prototype controls (not part of the plugin) ---------- */
+  .proto-bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid #222; color: var(--dim); font-size: 11px; }
+  .proto-bar strong { color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .proto-bar .seg button { background: #1a1a1a; border: 1px solid #2c2c2c; padding: 3px 9px; color: var(--muted); }
+  .proto-bar .seg button:first-child { border-radius: 4px 0 0 4px; }
+  .proto-bar .seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+  .proto-bar .seg button.on { background: #2a2a2a; color: var(--text); }
+  .stage { display: flex; justify-content: center; padding: 28px 16px 60px; }
+
+  /* ---------- Panel frame (mimics a docked Premiere panel) ---------- */
+  .panel { width: 340px; max-width: 100%; height: 660px; background: var(--bg);
+    border: 1px solid #2b2b2b; border-radius: 4px; display: flex; flex-direction: column;
+    overflow: hidden; position: relative; transition: width .2s ease; }
+  .panel.wide { width: 440px; }
+  .panel-tab { display: flex; align-items: center; justify-content: space-between;
+    height: 26px; padding: 0 8px; background: #191919; border-bottom: 1px solid #2b2b2b; }
+  .panel-tab span { font-size: 11px; color: var(--text); padding: 0 4px;
+    border-bottom: 2px solid var(--accent); line-height: 24px; }
+  .panel-tab i { color: var(--dim); font-style: normal; font-size: 13px; }
+
+  nav { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--bg); }
+  nav button.tab { flex: 1; background: none; border: 0; padding: 9px 4px 8px; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px;
+    border-bottom: 2px solid transparent; }
+  nav button.tab svg { width: 16px; height: 16px; }
+  nav button.tab:hover { color: var(--text); }
+  nav button.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+  nav .gear { background: none; border: 0; border-left: 1px solid var(--line); padding: 0 12px; color: var(--muted); }
+  nav .gear:hover { color: var(--text); }
+  nav .gear svg { width: 16px; height: 16px; display: block; }
+
+  .view { flex: 1; overflow-y: auto; padding: 14px; display: none; }
+  .view.on { display: block; }
+  .view::-webkit-scrollbar { width: 8px; }
+  .view::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 4px; }
+
+  /* ---------- Shared bits ---------- */
+  .label { font-size: 11px; color: var(--muted); margin: 0 0 6px; display: block; }
+  .field { display: flex; gap: 6px; }
+  .input { flex: 1; min-width: 0; background: var(--bg-2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 8px 10px; outline: none; }
+  .input:focus { border-color: var(--accent); }
+  .input.bad { border-color: var(--err); }
+  .btn { background: var(--bg-3); border: 1px solid #444; border-radius: var(--radius);
+    padding: 7px 12px; white-space: nowrap; }
+  .btn:hover { background: #3a3a3a; }
+  .btn.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--accent); }
+  .btn.block { width: 100%; padding: 10px; font-size: 13px; }
+  .btn.ghost { background: none; border-color: transparent; color: var(--muted); }
+  .btn.ghost:hover { color: var(--text); background: var(--bg-2); }
+  .hint { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  .hint.err { color: var(--err); }
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
+  .divider { height: 1px; background: var(--line); margin: 14px 0; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .spacer { flex: 1; }
+  .chip { background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: 3px 9px; font-size: 11px; color: var(--muted); }
+  button.chip:hover { color: var(--text); border-color: #555; }
+
+  /* ---------- Link: empty ---------- */
+  .platforms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .try { margin-top: 22px; }
+  .try .label { margin-bottom: 8px; }
+  .try-list { display: flex; flex-direction: column; gap: 6px; }
+  .try-list button { text-align: left; background: none; border: 1px dashed #3d3d3d; border-radius: var(--radius);
+    padding: 7px 10px; color: var(--muted); }
+  .try-list button:hover { border-color: #5a5a5a; color: var(--text); }
+
+  /* ---------- Video card ---------- */
+  .thumb { position: relative; aspect-ratio: 16/9; border-radius: 6px; overflow: hidden;
+    display: grid; place-items: center; font-weight: 700; letter-spacing: .04em; color: rgba(255,255,255,.85); }
+  .thumb .dur { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.75);
+    font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+  .thumb .plat { position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.6);
+    font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+  .vid { padding: 10px; display: grid; grid-template-columns: 120px 1fr; gap: 10px; }
+  .vid .meta { min-width: 0; }
+  .vid .title { font-size: 12.5px; font-weight: 600; line-height: 1.3; margin: 0 0 4px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .vid .by { color: var(--muted); font-size: 11px; }
+  .vid .change { margin-top: 6px; padding: 0; background: none; border: 0; color: var(--accent); font-size: 11px; }
+
+  .skeleton { background: linear-gradient(90deg, #262626 0%, #303030 50%, #262626 100%);
+    background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 4px; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  /* ---------- Segmented control ---------- */
+  .seg2 { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg-2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 2px; }
+  .seg2 button { background: none; border: 0; border-radius: 4px; padding: 6px; color: var(--muted); }
+  .seg2 button.on { background: var(--bg-3); color: var(--text); box-shadow: 0 1px 0 rgba(255,255,255,.04) inset; }
+
+  /* ---------- Range slider ---------- */
+  .range { position: relative; height: 28px; margin: 14px 8px 4px; touch-action: none; cursor: pointer; }
+  .range .track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; background: #3a3a3a; border-radius: 2px; }
+  .range .fill { position: absolute; top: 12px; height: 4px; background: var(--accent); border-radius: 2px; }
+  .range .handle { position: absolute; top: 5px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%;
+    background: #f1f1f1; border: 2px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: grab; }
+  .range .handle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .range .handle.drag { cursor: grabbing; transform: scale(1.1); }
+  .scale { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; margin: 0 8px; }
+  .times { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: end; margin-top: 12px; }
+  .times > div { min-width: 0; }
+  .times .input { width: 100%; text-align: center; font-variant-numeric: tabular-nums; font-size: 13px; padding: 7px 4px; }
+  .times .arrow { color: var(--dim); padding-bottom: 8px; }
+  .cliplen { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .cliplen b { font-variant-numeric: tabular-nums; }
+  .quick { display: flex; gap: 4px; }
+
+  /* ---------- Options ---------- */
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  select.input { appearance: none; padding-right: 26px;
+    background-image: linear-gradient(45deg, transparent 50%, #999 50%), linear-gradient(135deg, #999 50%, transparent 50%);
+    background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+  details.more { margin-top: 12px; }
+  details.more summary { cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; }
+  details.more summary::before { content: "▸ "; }
+  details.more[open] summary::before { content: "▾ "; }
+  details.more .inner { padding: 10px 0 0; display: flex; flex-direction: column; gap: 10px; }
+  .check { display: flex; gap: 8px; align-items: flex-start; }
+  .check input { margin: 2px 0 0; accent-color: var(--accent); }
+  .check small { display: block; color: var(--dim); }
+
+  .footer-action { position: sticky; bottom: -14px; margin: 16px -14px -14px; padding: 12px 14px 14px;
+    background: var(--bg); border-top: 1px solid var(--line); }
+  .footer-action .sub { text-align: center; color: var(--dim); font-size: 11px; margin-top: 6px; }
+
+  /* ---------- Progress ---------- */
+  .steps { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+  .step { display: flex; align-items: center; gap: 10px; color: var(--dim); }
+  .step .dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #444; flex: none;
+    display: grid; place-items: center; font-size: 10px; }
+  .step.active { color: var(--text); }
+  .step.active .dot { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+  .step.done { color: var(--muted); }
+  .step.done .dot { background: var(--ok); border-color: var(--ok); color: #0b2; }
+  .step.done .dot::after { content: "✓"; color: #fff; font-weight: 700; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .bar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 14px; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  .bar-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 6px;
+    font-variant-numeric: tabular-nums; }
+
+  /* ---------- Done / error ---------- */
+  .result { text-align: center; padding: 18px 14px; }
+  .result .icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    margin: 0 auto 10px; font-size: 20px; font-weight: 700; }
+  .result.ok .icon { background: rgba(63,185,122,.15); color: var(--ok); }
+  .result.bad .icon { background: rgba(229,88,79,.15); color: var(--err); }
+  .result h3 { margin: 0 0 4px; font-size: 14px; }
+  .result p { margin: 0; color: var(--muted); }
+  .file { margin-top: 12px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+    font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--muted); word-break: break-all; text-align: left; }
+  .result .row { justify-content: center; margin-top: 14px; }
+
+  /* ---------- Search results ---------- */
+  .results { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+  .res { display: grid; grid-template-columns: 104px 1fr; gap: 10px; padding: 6px; border-radius: var(--radius);
+    background: none; border: 0; text-align: left; }
+  .res:hover { background: var(--bg-2); }
+  .res .title { font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; }
+  .res .by { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .res .thumb { font-size: 10px; }
+
+  /* ---------- GIFs ---------- */
+  .gif-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 12px; }
+  .panel.wide .gif-grid { grid-template-columns: repeat(3, 1fr); }
+  .gif { position: relative; border-radius: 6px; overflow: hidden; border: 2px solid transparent; padding: 0;
+    background: #2a2a2a; aspect-ratio: var(--ar, 1); }
+  .gif .anim { position: absolute; inset: 0; background-size: 300% 300%; animation: drift var(--spd, 4s) ease-in-out infinite alternate; }
+  .gif .blob { position: absolute; width: 34%; aspect-ratio: 1; border-radius: 50%; background: rgba(255,255,255,.85);
+    left: 33%; top: 33%; animation: bob var(--spd, 4s) ease-in-out infinite; mix-blend-mode: overlay; }
+  .gif .cap { position: absolute; left: 6px; bottom: 5px; font-size: 10px; font-weight: 700; color: #fff;
+    text-shadow: 0 1px 3px rgba(0,0,0,.6); text-transform: uppercase; letter-spacing: .04em; }
+  .gif.sel { border-color: var(--accent); }
+  .gif.sel::after { content: "✓"; position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  @keyframes drift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+  @keyframes bob { 0%,100% { transform: translate(-30%, 20%) scale(.8); } 50% { transform: translate(30%, -20%) scale(1.15); } }
+  .attrib { text-align: center; color: var(--dim); font-size: 10px; margin-top: 12px; letter-spacing: .06em; }
+
+  /* ---------- History ---------- */
+  .hist { display: flex; flex-direction: column; gap: 2px; }
+  .h-item { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 8px 6px; border-radius: var(--radius); }
+  .h-item:hover { background: var(--bg-2); }
+  .h-item .thumb { font-size: 8px; }
+  .h-item .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .h-item .by { color: var(--muted); font-size: 11px; }
+  .h-item .acts { display: flex; gap: 2px; opacity: .55; }
+  .h-item:hover .acts { opacity: 1; }
+  .icon-btn { background: none; border: 0; padding: 5px; border-radius: 4px; color: var(--muted); display: grid; place-items: center; }
+  .icon-btn:hover { background: var(--bg-3); color: var(--text); }
+  .icon-btn svg { width: 14px; height: 14px; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 10px; }
+
+  /* ---------- Settings sheet ---------- */
+  .sheet-wrap { position: absolute; inset: 26px 0 0; background: rgba(0,0,0,.5); display: none; }
+  .sheet-wrap.on { display: block; }
+  .sheet { position: absolute; inset: 0 0 0 0; background: var(--bg); overflow-y: auto; padding: 14px;
+    animation: slide .18s ease-out; }
+  @keyframes slide { from { transform: translateX(16px); opacity: 0; } }
+  .sheet h2 { font-size: 13px; margin: 0; }
+  .set { margin-top: 16px; }
+  .set .sub { color: var(--dim); font-size: 11px; margin-top: 5px; }
+  .engine { display: flex; align-items: center; gap: 8px; padding: 10px; }
+  .engine .led { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+  /* ---------- Toast ---------- */
+  .toast { position: absolute; left: 50%; bottom: 14px; transform: translate(-50%, 20px); opacity: 0;
+    background: #3a3a3a; padding: 7px 12px; border-radius: var(--radius); font-size: 11px; pointer-events: none;
+    transition: all .2s; white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .toast.on { transform: translate(-50%, 0); opacity: 1; }
+
+  .notes { max-width: 340px; margin: 0 0 0 28px; color: var(--dim); font-size: 11.5px; line-height: 1.6; }
+  .notes h4 { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin: 4px 0 8px; }
+  .notes ol { padding-left: 18px; margin: 0; }
+  .notes li { margin-bottom: 6px; }
+  @media (max-width: 860px) { .notes { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <strong>PROTOTYPE</strong>
+  <span>Panel width</span>
+  <div class="seg" id="widthSeg">
+    <button data-w="narrow" class="on">Narrow</button><button data-w="wide">Wide</button>
+  </div>
+  <button class="chip" id="resetBtn">Reset</button>
+  <span>Everything here is fake data. Nothing downloads.</span>
+</div>
+
+<div class="stage">
+  <div class="panel" id="panel">
+    <div class="panel-tab"><span>Grab</span><i>≡</i></div>
+
+    <nav>
+      <button class="tab on" data-view="link">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1"/></svg>
+        Link
+      </button>
+      <button class="tab" data-view="search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        Search
+      </button>
+      <button class="tab" data-view="gifs">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M5 8h2v2H5.5M9.5 6v4M11.5 6v4h1.5M11.5 8h1"/></svg>
+        GIFs
+      </button>
+      <button class="tab" data-view="history">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>
+        History
+      </button>
+      <button class="gear" id="openSettings" aria-label="Settings">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
+      </button>
+    </nav>
+
+    <!-- ================= LINK ================= -->
+    <section class="view on" id="view-link"></section>
+
+    <!-- ================= SEARCH ================= -->
+    <section class="view" id="view-search">
+      <div class="field">
+        <input class="input" id="searchInput" placeholder="Search YouTube" value="podcast interview product design">
+        <button class="btn" id="searchBtn">Search</button>
+      </div>
+      <div class="hint">YouTube only for now. Click a result to clip or download it.</div>
+      <div class="results" id="results"></div>
+    </section>
+
+    <!-- ================= GIFS ================= -->
+    <section class="view" id="view-gifs">
+      <div class="field">
+        <input class="input" id="gifInput" placeholder="Search GIFs" value="">
+        <button class="btn" id="gifBtn">Search</button>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:5px" id="gifTags"></div>
+      <div class="gif-grid" id="gifGrid"></div>
+      <div class="attrib">POWERED BY GIPHY</div>
+      <div class="footer-action" id="gifAction" style="display:none">
+        <button class="btn primary block" id="gifAdd">Add to project</button>
+        <div class="sub">Imported as MP4 into “Web Downloads / GIFs”</div>
+      </div>
+    </section>
+
+    <!-- ================= HISTORY ================= -->
+    <section class="view" id="view-history">
+      <div class="row" style="margin-bottom:8px">
+        <span class="label" style="margin:0">Recent downloads</span><span class="spacer"></span>
+        <button class="btn ghost" id="clearHist" style="padding:3px 6px;font-size:11px">Clear</button>
+      </div>
+      <div class="hist" id="hist"></div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <div class="sheet-wrap" id="settings">
+      <div class="sheet">
+        <div class="row">
+          <button class="icon-btn" id="closeSettings" aria-label="Back">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3L5 8l5 5"/></svg>
+          </button>
+          <h2>Settings</h2>
+        </div>
+
+        <div class="set">
+          <span class="label">Save downloads to</span>
+          <div class="field">
+            <input class="input" value="[Project folder]/Web Downloads" readonly>
+            <button class="btn">Change</button>
+          </div>
+          <div class="sub">Next to your .prproj file, so media travels with the project.</div>
+        </div>
+
+        <div class="set">
+          <span class="label">Import into bin</span>
+          <input class="input" style="width:100%" value="Web Downloads">
+        </div>
+
+        <div class="set">
+          <span class="label">Default quality</span>
+          <select class="input" style="width:100%">
+            <option>Best available (up to 1080p)</option><option>720p</option><option>Audio only</option>
+          </select>
+        </div>
+
+        <div class="set">
+          <span class="label">Make files Premiere-friendly</span>
+          <select class="input" style="width:100%">
+            <option>Only when needed (recommended)</option><option>Always convert to H.264</option><option>Never — keep original</option>
+          </select>
+          <div class="sub">Converts files Premiere struggles with. Leaves good files untouched, so it's faster.</div>
+        </div>
+
+        <div class="set">
+          <span class="label">Signed-in sites (Instagram, some X posts)</span>
+          <select class="input" style="width:100%">
+            <option>Don't use sign-in</option><option>Use my Chrome sign-in</option><option>Use my Safari sign-in</option><option>Use my Firefox sign-in</option>
+          </select>
+          <div class="sub">Grab reads your browser's login for that site only. Your password is never seen or stored.</div>
+        </div>
+
+        <div class="set">
+          <span class="label">Download engine</span>
+          <div class="card engine">
+            <span class="led"></span>
+            <div><div>yt-dlp 2026.10.09</div><div class="sub" style="margin:0">Up to date · checked today</div></div>
+            <span class="spacer"></span>
+            <button class="btn" id="checkUpd">Check</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <aside class="notes">
+    <h4>Try this</h4>
+    <ol>
+      <li>Click the <b>YouTube podcast</b> sample link.</li>
+      <li>Switch to <b>Clip</b>. Drag the handles or type times.</li>
+      <li>Hit download and watch it land in the bin.</li>
+      <li>Try the <b>Instagram</b> sample to see the sign-in error.</li>
+      <li>Check <b>Search</b>, <b>GIFs</b> and <b>History</b>.</li>
+      <li>Flip panel width to <b>Wide</b> at the top.</li>
+    </ol>
+  </aside>
+</div>
+
+<script>
+/* ================= Data ================= */
+const VIDEOS = {
+  youtube: { platform: "YouTube", title: "The Long Table — Ep. 112: Why most redesigns fail (with a product lead)", by: "The Long Table Podcast", dur: 3872, hue: [210, 260], short: "EP 112" },
+  x:       { platform: "X", title: "Watching this robot fold laundry is weirdly satisfying", by: "@mechanical_mira", dur: 47, hue: [0, 30], short: "CLIP" },
+  ig:      { platform: "Instagram", title: "", by: "", dur: 0, hue: [300, 340], short: "REEL" },
+  other:   { platform: "Vimeo", title: "Drift — a 4K short film shot entirely at night", by: "Nightframe Studio", dur: 612, hue: [160, 200], short: "DRIFT" },
+};
+const SEARCH = [
+  { title: "Designing for trust: a 2-hour conversation", by: "Design Matters Weekly", dur: 7311, hue: [20, 50] },
+  { title: "The Long Table — Ep. 112: Why most redesigns fail", by: "The Long Table Podcast", dur: 3872, hue: [210, 260] },
+  { title: "How I'd learn product design in 2026 (honest answer)", by: "Pixel & Pine", dur: 1544, hue: [120, 170] },
+  { title: "Interview: the designer behind a famous onboarding flow", by: "Craft Talks", dur: 2690, hue: [280, 320] },
+  { title: "Portfolio review live — tearing down 5 case studies", by: "Juniors Who Ship", dur: 4410, hue: [0, 25] },
+  { title: "Product thinking for designers, explained in 12 minutes", by: "Simple Systems", dur: 731, hue: [180, 220] },
+];
+const GIF_TAGS = ["Trending", "reaction", "wow", "applause", "facepalm", "mind blown", "thank you"];
+const GIF_WORDS = ["wow", "nope", "yes!", "lol", "omg", "clap", "bye", "hype", "same", "ok", "huh", "nice"];
+
+let history = [
+  { title: "Drift — a 4K short film shot entirely at night", meta: "Full video · 1080p · Yesterday", hue: [160, 200], short: "DRIFT" },
+  { title: "Designing for trust: a 2-hour conversation", meta: "Clip 41:10–42:05 · 1080p · Oct 14", hue: [20, 50], short: "TRUST" },
+];
+
+/* ================= Helpers ================= */
+const $ = s => document.querySelector(s);
+const pad = n => String(n).padStart(2, "0");
+const fmt = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`; };
+const fmtFile = s => { s = Math.round(s); return `${pad(Math.floor(s/3600))}-${pad(Math.floor(s%3600/60))}-${pad(s%60)}`; };
+const parseT = str => { const p = str.trim().split(":"); if (!p.length || p.length > 3 || p.some(v => v === "" || isNaN(v))) return null;
+  return p.map(Number).reduce((a, v) => a * 60 + v, 0); };
+const grad = ([a, b]) => `linear-gradient(135deg, hsl(${a} 55% 38%), hsl(${b} 60% 22%))`;
+const thumbHTML = (v, cls = "") => `<div class="thumb ${cls}" style="background:${grad(v.hue)}">${v.short || ""}${v.platform ? `<span class="plat">${v.platform}</span>` : ""}${v.dur ? `<span class="dur">${fmt(v.dur)}</span>` : ""}</div>`;
+let toastT;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), 1800); }
+
+function detect(url) {
+  const u = url.trim();
+  if (!/^(https?:\/\/)?[\w-]+(\.[\w-]+)+/i.test(u)) return null;
+  if (/youtu\.?be/i.test(u)) return "youtube";
+  if (/(twitter|x)\.com/i.test(u)) return "x";
+  if (/instagram\.com/i.test(u)) return "ig";
+  return "other";
+}
+
+/* ================= Tabs ================= */
+document.querySelectorAll("nav .tab").forEach(b => b.onclick = () => showView(b.dataset.view));
+function showView(v) {
+  document.querySelectorAll("nav .tab").forEach(t => t.classList.toggle("on", t.dataset.view === v));
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "view-" + v));
+  if (v === "history") renderHistory();
+}
+
+/* ================= LINK VIEW (state machine) ================= */
+const S = { state: "empty", url: "", key: null, vid: null, mode: "full", start: 0, end: 60, quality: "1080p", timer: null };
+const linkView = $("#view-link");
+
+function renderLink() {
+  clearInterval(S.timer);
+  const r = { empty: viewEmpty, loading: viewLoading, ready: viewReady, downloading: viewDownloading, done: viewDone, error: viewError }[S.state];
+  r();
+}
+
+function pasteRow(value = "", bad = "") {
+  return `<span class="label">Paste a video link</span>
+    <div class="field">
+      <input class="input ${bad ? "bad" : ""}" id="urlInput" placeholder="https://…" value="${value}" spellcheck="false">
+      <button class="btn primary" id="goBtn">Get</button>
+    </div>
+    ${bad ? `<div class="hint err">${bad}</div>` : `<div class="hint">Or press ⌘V anywhere in this panel.</div>`}`;
+}
+function bindPaste() {
+  const go = () => submit($("#urlInput").value);
+  $("#goBtn").onclick = go;
+  $("#urlInput").onkeydown = e => { if (e.key === "Enter") go(); };
+}
+
+function viewEmpty(err = "") {
+  linkView.innerHTML = `
+    ${pasteRow(S.url, err)}
+    <div class="platforms">
+      <span class="chip">YouTube</span><span class="chip">X / Twitter</span><span class="chip">Instagram</span>
+      <span class="chip">TikTok</span><span class="chip">Vimeo</span><span class="chip">+ many more</span>
+    </div>
+    <div class="try">
+      <span class="label">Sample links (prototype only)</span>
+      <div class="try-list">
+        <button data-u="https://youtube.com/watch?v=lt112">▶ YouTube podcast · 1 hr 4 min</button>
+        <button data-u="https://x.com/mechanical_mira/status/18842">▶ X video · 47 sec</button>
+        <button data-u="https://instagram.com/reel/Cx9a1">▶ Instagram reel (needs sign-in)</button>
+        <button data-u="not a link">▶ Something that isn't a link</button>
+      </div>
+    </div>`;
+  bindPaste();
+  linkView.querySelectorAll(".try-list button").forEach(b => b.onclick = () => submit(b.dataset.u));
+}
+
+function submit(url) {
+  S.url = url.trim();
+  if (!S.url) return;
+  const k = detect(S.url);
+  if (!k) { S.state = "empty"; clearInterval(S.timer); viewEmpty("That doesn't look like a link. Copy the address from your browser and try again."); return; }
+  S.key = k; S.state = "loading"; renderLink();
+  setTimeout(() => {
+    if (S.state !== "loading") return;
+    if (k === "ig") { S.state = "error"; renderLink(); return; }
+    S.vid = { ...VIDEOS[k] };
+    S.mode = S.vid.dur > 600 ? "clip" : "full";
+    S.start = S.vid.dur > 600 ? 750 : 0;
+    S.end = S.vid.dur > 600 ? 810 : S.vid.dur;
+    S.state = "ready"; renderLink();
+  }, 900);
+}
+
+function viewLoading() {
+  linkView.innerHTML = `${pasteRow(S.url)}
+    <div class="card vid" style="margin-top:14px">
+      <div class="skeleton" style="aspect-ratio:16/9"></div>
+      <div><div class="skeleton" style="height:12px;margin-bottom:6px"></div><div class="skeleton" style="height:12px;width:70%;margin-bottom:10px"></div><div class="skeleton" style="height:10px;width:45%"></div></div>
+    </div>
+    <div class="hint" style="text-align:center;margin-top:12px">Looking up video…</div>`;
+  bindPaste();
+}
+
+function videoCard() {
+  const v = S.vid;
+  return `<div class="card vid">
+    ${thumbHTML(v)}
+    <div class="meta">
+      <p class="title">${v.title}</p>
+      <div class="by">${v.by}</div>
+      <button class="change" id="changeBtn">Use a different link</button>
+    </div>
+  </div>`;
+}
+
+function viewReady() {
+  const v = S.vid, long = v.dur > 60;
+  linkView.innerHTML = `
+    ${videoCard()}
+    <div style="margin-top:16px">
+      <div class="seg2" role="tablist">
+        <button data-m="full" class="${S.mode === "full" ? "on" : ""}">Full video · ${fmt(v.dur)}</button>
+        <button data-m="clip" class="${S.mode === "clip" ? "on" : ""}">Just a clip</button>
+      </div>
+    </div>
+    <div id="clipBox" style="${S.mode === "clip" ? "" : "display:none"}">
+      <div class="range" id="range">
+        <div class="track"></div><div class="fill" id="fill"></div>
+        <div class="handle" id="hA" tabindex="0" role="slider" aria-label="Start"></div>
+        <div class="handle" id="hB" tabindex="0" role="slider" aria-label="End"></div>
+      </div>
+      <div class="scale"><span>0:00</span><span>${fmt(v.dur / 2)}</span><span>${fmt(v.dur)}</span></div>
+      <div class="times">
+        <div><span class="label">Start</span><input class="input" id="tA"></div>
+        <span class="arrow">→</span>
+        <div><span class="label">End</span><input class="input" id="tB"></div>
+      </div>
+      <div class="cliplen">
+        <span style="color:var(--muted)">Clip length <b id="len" style="color:var(--text)"></b></span>
+        <div class="quick">${long ? `<button class="chip" data-l="15">15s</button><button class="chip" data-l="30">30s</button><button class="chip" data-l="60">1m</button>` : ""}</div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="opts">
+      <div><span class="label">Quality</span>
+        <select class="input" id="quality" style="width:100%">
+          <option value="1080p">1080p (best)</option><option value="720p">720p</option><option value="480p">480p</option><option value="audio">Audio only</option>
+        </select></div>
+      <div><span class="label">Import to bin</span>
+        <select class="input" style="width:100%"><option>Web Downloads</option><option>Footage</option><option>+ New bin…</option></select></div>
+    </div>
+    <details class="more">
+      <summary>More options</summary>
+      <div class="inner">
+        <label class="check"><input type="checkbox" id="atPlayhead"><span>Also place on timeline at playhead<small>Drops it into the active sequence.</small></span></label>
+        <label class="check"><input type="checkbox" checked><span>Save source link with the clip<small>Stored in the clip's metadata so you can credit the creator later.</small></span></label>
+      </div>
+    </details>
+    <div class="footer-action">
+      <button class="btn primary block" id="dlBtn"></button>
+      <div class="sub" id="dlSub"></div>
+    </div>`;
+
+  $("#changeBtn").onclick = () => { S.state = "empty"; S.url = ""; renderLink(); };
+  linkView.querySelectorAll(".seg2 button").forEach(b => b.onclick = () => {
+    S.mode = b.dataset.m;
+    linkView.querySelectorAll(".seg2 button").forEach(x => x.classList.toggle("on", x === b));
+    $("#clipBox").style.display = S.mode === "clip" ? "" : "none";
+    updateClip();
+  });
+  $("#quality").value = S.quality;
+  $("#quality").onchange = e => { S.quality = e.target.value; updateClip(); };
+  linkView.querySelectorAll(".quick .chip").forEach(c => c.onclick = () => {
+    S.end = Math.min(v.dur, S.start + Number(c.dataset.l)); updateClip();
+  });
+  bindRange();
+  bindTimeInputs();
+  $("#dlBtn").onclick = startDownload;
+  updateClip();
+}
+
+function bindRange() {
+  const range = $("#range"), dur = S.vid.dur;
+  const tFromX = x => { const r = range.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * dur); };
+  const setT = (which, t) => {
+    if (which === "A") S.start = Math.min(t, S.end - 1);
+    else S.end = Math.max(t, S.start + 1);
+    S.start = Math.max(0, S.start); S.end = Math.min(dur, S.end);
+    updateClip();
+  };
+  let dragging = null;
+  range.addEventListener("pointerdown", e => {
+    const t = tFromX(e.clientX);
+    dragging = e.target.id === "hA" ? "A" : e.target.id === "hB" ? "B" : (Math.abs(t - S.start) < Math.abs(t - S.end) ? "A" : "B");
+    range.setPointerCapture(e.pointerId);
+    $("#h" + dragging).classList.add("drag");
+    setT(dragging, t);
+  });
+  range.addEventListener("pointermove", e => { if (dragging) setT(dragging, tFromX(e.clientX)); });
+  const end = () => { if (dragging) $("#h" + dragging).classList.remove("drag"); dragging = null; };
+  range.addEventListener("pointerup", end); range.addEventListener("pointercancel", end);
+  ["A", "B"].forEach(w => $("#h" + w).addEventListener("keydown", e => {
+    const step = e.shiftKey ? 10 : 1, cur = w === "A" ? S.start : S.end;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { setT(w, cur - step); e.preventDefault(); }
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") { setT(w, cur + step); e.preventDefault(); }
+  }));
+}
+
+function bindTimeInputs() {
+  [["#tA", "A"], ["#tB", "B"]].forEach(([sel, w]) => {
+    const el = $(sel);
+    const commit = () => {
+      const t = parseT(el.value);
+      if (t === null || t > S.vid.dur) { el.classList.add("bad"); toast(t === null ? "Use a format like 12:30 or 1:02:45" : `Video is only ${fmt(S.vid.dur)} long`); return; }
+      el.classList.remove("bad");
+      if (w === "A") S.start = Math.min(t, S.end - 1); else S.end = Math.max(t, S.start + 1);
+      updateClip();
+    };
+    el.onblur = commit;
+    el.onkeydown = e => { if (e.key === "Enter") { commit(); el.blur(); } };
+  });
+}
+
+function updateClip() {
+  const v = S.vid, dur = v.dur;
+  const clip = S.mode === "clip";
+  if ($("#fill")) {
+    const a = S.start / dur * 100, b = S.end / dur * 100;
+    $("#fill").style.left = a + "%"; $("#fill").style.width = (b - a) + "%";
+    $("#hA").style.left = a + "%"; $("#hB").style.left = b + "%";
+    if (document.activeElement !== $("#tA")) $("#tA").value = fmt(S.start);
+    if (document.activeElement !== $("#tB")) $("#tB").value = fmt(S.end);
+    $("#len").textContent = fmt(S.end - S.start);
+  }
+  const secs = clip ? S.end - S.start : dur;
+  const mbPerSec = { "1080p": 0.55, "720p": 0.3, "480p": 0.16, audio: 0.016 }[S.quality];
+  const mb = secs * mbPerSec;
+  const size = mb > 1000 ? (mb / 1000).toFixed(1) + " GB" : Math.max(1, Math.round(mb)) + " MB";
+  $("#dlBtn").textContent = S.quality === "audio"
+    ? (clip ? `Download audio clip (${fmt(secs)})` : "Download audio")
+    : (clip ? `Download clip (${fmt(secs)})` : "Download full video");
+  $("#dlSub").textContent = `About ${size} · imports into “Web Downloads”`;
+}
+
+function startDownload() {
+  S.state = "downloading"; renderLink();
+}
+
+function viewDownloading() {
+  const clip = S.mode === "clip";
+  linkView.innerHTML = `
+    ${videoCard()}
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="bar-meta"><span id="barLabel">Starting…</span><span id="barRight"></span></div>
+    <div class="steps">
+      <div class="step" data-s="0"><span class="dot"></span>${clip ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading video"}</div>
+      <div class="step" data-s="1"><span class="dot"></span>Checking it plays well in Premiere</div>
+      <div class="step" data-s="2"><span class="dot"></span>Importing into “Web Downloads”</div>
+    </div>
+    <div class="footer-action"><button class="btn block" id="cancelBtn">Cancel</button></div>`;
+  $("#changeBtn").style.display = "none";
+  $("#cancelBtn").onclick = () => { S.state = "ready"; renderLink(); toast("Download cancelled"); };
+
+  let p = 0, phase = 0;
+  const steps = linkView.querySelectorAll(".step");
+  const setPhase = n => steps.forEach((s, i) => { s.classList.toggle("done", i < n); s.classList.toggle("active", i === n); });
+  setPhase(0);
+  S.timer = setInterval(() => {
+    if (phase === 0) {
+      p = Math.min(100, p + 4 + Math.random() * 6);
+      $("#barFill").style.width = p * 0.8 + "%";
+      $("#barLabel").textContent = `Downloading · ${Math.round(p)}%`;
+      $("#barRight").textContent = `${(8 + Math.random() * 6).toFixed(1)} MB/s`;
+      if (p >= 100) { phase = 1; setPhase(1); $("#barLabel").textContent = "Checking format…"; $("#barRight").textContent = ""; p = 0; }
+    } else if (phase === 1) {
+      p += 20; $("#barFill").style.width = 80 + p * 0.1 + "%";
+      if (p >= 100) { phase = 2; setPhase(2); $("#barLabel").textContent = "Importing…"; p = 0; }
+    } else {
+      p += 25; $("#barFill").style.width = 90 + p * 0.1 + "%";
+      if (p >= 100) { clearInterval(S.timer); addToHistory(); S.state = "done"; renderLink(); }
+    }
+  }, 120);
+}
+
+function fileName() {
+  const base = S.vid.title.split(/[—:]/)[0].trim().replace(/[^\w ]/g, "").replace(/\s+/g, " ");
+  const ext = S.quality === "audio" ? "m4a" : "mp4";
+  return S.mode === "clip" ? `${base} [${fmtFile(S.start)} to ${fmtFile(S.end)}].${ext}` : `${base}.${ext}`;
+}
+
+function addToHistory() {
+  const v = S.vid;
+  history.unshift({ title: v.title, hue: v.hue, short: v.short,
+    meta: `${S.mode === "clip" ? `Clip ${fmt(S.start)}–${fmt(S.end)}` : "Full video"} · ${S.quality === "audio" ? "Audio" : S.quality} · Just now` });
+}
+
+function viewDone() {
+  const atPlayhead = false;
+  linkView.innerHTML = `
+    <div class="card result ok">
+      <div class="icon">✓</div>
+      <h3>Added to your project</h3>
+      <p>Find it in the <b style="color:var(--text)">Web Downloads</b> bin.</p>
+      <div class="file">${fileName()}</div>
+      <div class="row">
+        <button class="btn" id="revealBtn">Show in Project</button>
+        <button class="btn primary" id="againBtn">Grab another</button>
+      </div>
+    </div>
+    <div class="hint" style="text-align:center;margin-top:12px">Source link saved in clip metadata.</div>`;
+  $("#revealBtn").onclick = () => toast("Would select the clip in the Project panel");
+  $("#againBtn").onclick = () => { S.state = "empty"; S.url = ""; renderLink(); };
+}
+
+function viewError() {
+  linkView.innerHTML = `
+    ${pasteRow(S.url)}
+    <div class="card result bad" style="margin-top:14px">
+      <div class="icon">!</div>
+      <h3>Instagram needs you to sign in</h3>
+      <p>This reel is only visible to signed-in users. Let Grab use your browser's Instagram login, then try again.</p>
+      <div class="row">
+        <button class="btn" id="errSettings">Open settings</button>
+        <button class="btn primary" id="errRetry">Try again</button>
+      </div>
+    </div>`;
+  bindPaste();
+  $("#errSettings").onclick = () => $("#settings").classList.add("on");
+  $("#errRetry").onclick = () => submit(S.url);
+}
+
+/* ================= SEARCH ================= */
+function renderSearch() {
+  $("#results").innerHTML = SEARCH.map((v, i) => `
+    <button class="res" data-i="${i}">
+      ${thumbHTML({ ...v, short: "" })}
+      <div><div class="title">${v.title}</div><div class="by">${v.by}</div></div>
+    </button>`).join("");
+  $("#results").querySelectorAll(".res").forEach(b => b.onclick = () => {
+    const v = SEARCH[b.dataset.i];
+    S.vid = { platform: "YouTube", short: v.title.split(" ")[0].toUpperCase(), ...v };
+    S.url = "https://youtube.com/watch?v=" + (1000 + Number(b.dataset.i));
+    S.mode = v.dur > 600 ? "clip" : "full"; S.start = 0; S.end = Math.min(60, v.dur); S.state = "ready";
+    showView("link"); renderLink();
+  });
+}
+$("#searchBtn").onclick = () => { $("#results").innerHTML = '<div class="hint" style="text-align:center;padding:20px">Searching…</div>'; setTimeout(renderSearch, 500); };
+$("#searchInput").onkeydown = e => { if (e.key === "Enter") $("#searchBtn").click(); };
+
+/* ================= GIFS ================= */
+const selGifs = new Set();
+function renderGifs(seed = 0) {
+  selGifs.clear(); updateGifAction();
+  const ars = [1, 1.33, 0.8, 1.5, 1, 0.75];
+  $("#gifGrid").innerHTML = Array.from({ length: 12 }, (_, i) => {
+    const h = (i * 47 + seed * 83) % 360, ar = ars[(i + seed) % ars.length];
+    return `<button class="gif" data-i="${i}" style="--ar:${ar};--spd:${2.5 + (i % 4)}s">
+      <div class="anim" style="background-image:linear-gradient(120deg,hsl(${h} 70% 45%),hsl(${(h + 60) % 360} 70% 35%),hsl(${(h + 140) % 360} 65% 45%))"></div>
+      <div class="blob"></div><span class="cap">${GIF_WORDS[(i + seed) % GIF_WORDS.length]}</span></button>`;
+  }).join("");
+  $("#gifGrid").querySelectorAll(".gif").forEach(g => g.onclick = () => {
+    g.classList.toggle("sel");
+    g.classList.contains("sel") ? selGifs.add(g.dataset.i) : selGifs.delete(g.dataset.i);
+    updateGifAction();
+  });
+}
+function updateGifAction() {
+  $("#gifAction").style.display = selGifs.size ? "" : "none";
+  $("#gifAdd").textContent = selGifs.size > 1 ? `Add ${selGifs.size} GIFs to project` : "Add GIF to project";
+}
+$("#gifTags").innerHTML = GIF_TAGS.map((t, i) => `<button class="chip" data-i="${i}">${t}</button>`).join("");
+$("#gifTags").querySelectorAll(".chip").forEach(c => c.onclick = () => { $("#gifInput").value = c.dataset.i === "0" ? "" : c.textContent; renderGifs(Number(c.dataset.i)); });
+$("#gifBtn").onclick = () => renderGifs($("#gifInput").value.length + 3);
+$("#gifInput").onkeydown = e => { if (e.key === "Enter") $("#gifBtn").click(); };
+$("#gifAdd").onclick = () => {
+  const n = selGifs.size;
+  history.unshift({ title: `${n} GIF${n > 1 ? "s" : ""} from GIPHY`, meta: "MP4 · Just now", hue: [300, 40], short: "GIF" });
+  toast(`${n} GIF${n > 1 ? "s" : ""} added to “Web Downloads / GIFs”`);
+  document.querySelectorAll(".gif.sel").forEach(g => g.classList.remove("sel"));
+  selGifs.clear(); updateGifAction();
+};
+
+/* ================= HISTORY ================= */
+function renderHistory() {
+  if (!history.length) { $("#hist").innerHTML = '<div class="empty">Nothing yet.<br>Downloads you grab show up here.</div>'; return; }
+  $("#hist").innerHTML = history.map((h, i) => `
+    <div class="h-item">
+      ${thumbHTML({ hue: h.hue, short: h.short })}
+      <div style="min-width:0"><div class="title">${h.title}</div><div class="by">${h.meta}</div></div>
+      <div class="acts">
+        <button class="icon-btn" title="Import again" data-a="re"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 13h10"/></svg></button>
+        <button class="icon-btn" title="Copy source link" data-a="copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 10.5V4a1 1 0 011-1h6.5"/></svg></button>
+      </div>
+    </div>`).join("");
+  $("#hist").querySelectorAll(".icon-btn").forEach(b => b.onclick = () => toast(b.dataset.a === "re" ? "Imported again" : "Source link copied"));
+}
+$("#clearHist").onclick = () => { history = []; renderHistory(); };
+
+/* ================= Settings, paste shortcut, proto controls ================= */
+$("#openSettings").onclick = () => $("#settings").classList.add("on");
+$("#closeSettings").onclick = () => $("#settings").classList.remove("on");
+$("#checkUpd").onclick = () => toast("Already on the latest version");
+
+document.addEventListener("paste", e => {
+  if (e.target.tagName === "INPUT") return;
+  const text = (e.clipboardData || window.clipboardData).getData("text");
+  if (text) { showView("link"); submit(text); }
+});
+
+document.querySelectorAll("#widthSeg button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#widthSeg button").forEach(x => x.classList.toggle("on", x === b));
+  $("#panel").classList.toggle("wide", b.dataset.w === "wide");
+});
+$("#resetBtn").onclick = () => { S.state = "empty"; S.url = ""; $("#settings").classList.remove("on"); showView("link"); renderLink(); };
+
+renderLink();
+renderSearch();
+renderGifs();
+</script>
+</body>
+</html>

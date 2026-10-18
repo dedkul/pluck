@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+engine/bin/
+*.part
+*.ytdl
+CLAUDE.md
