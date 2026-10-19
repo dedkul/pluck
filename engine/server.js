@@ -74,7 +74,21 @@ function formatFor(quality) {
 // ---------- Jobs ----------
 const jobs = new Map();
 
-function startDownload({ url, outDir, quality }) {
+// 754 seconds -> "00-12-34" (dashes, because colons aren't allowed in file names).
+function stamp(sec) {
+  const s = Math.round(sec), p = n => String(n).padStart(2, "0");
+  return `${p(Math.floor(s / 3600))}-${p(Math.floor((s % 3600) / 60))}-${p(s % 60)}`;
+}
+
+// A clip is only valid if both ends are real numbers and the end comes after the start.
+function clipRange(start, end) {
+  if (start == null && end == null) return null;
+  const a = Number(start), b = Number(end);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b <= a) return false;
+  return { start: a, end: b };
+}
+
+function startDownload({ url, outDir, quality, clip }) {
   const id = crypto.randomUUID();
   const job = { id, status: "downloading", percent: 0, speed: "", eta: "", file: null, error: null, proc: null };
   jobs.set(id, job);
@@ -85,7 +99,9 @@ function startDownload({ url, outDir, quality }) {
     "--no-playlist", "--newline", "--progress", "--no-mtime", "--windows-filenames",
     "--progress-template", "download:PLUCK %(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
     "--print", "after_move:PLUCKFILE %(filepath)s",
-    "-o", path.join(outDir, "%(title).80B [%(id)s].%(ext)s"),
+    "-o", path.join(outDir, clip ? `%(title).80B [${stamp(clip.start)} to ${stamp(clip.end)}] [%(id)s].%(ext)s` : "%(title).80B [%(id)s].%(ext)s"),
+    // Clips: fetch only that stretch, and re-cut the edges so the clip starts exactly where asked.
+    ...(clip ? ["--download-sections", `*${clip.start}-${clip.end}`, "--force-keyframes-at-cuts"] : []),
     ...(FFMPEG ? ["--ffmpeg-location", FFMPEG] : []),
     ...formatFor(quality),
     "--", url,
@@ -182,7 +198,9 @@ async function handle(req, res) {
     const body = await readJson(req);
     if (!isHttpUrl(body.url)) return send(res, 400, { error: { code: "badurl", message: "That doesn't look like a link." } });
     const outDir = body.outDir && path.isAbsolute(body.outDir) ? body.outDir : path.join(os.homedir(), "Movies", "Pluck");
-    const job = startDownload({ url: body.url, outDir, quality: body.quality });
+    const clip = clipRange(body.start, body.end);
+    if (clip === false) return send(res, 400, { error: { code: "badclip", message: "The clip's end has to come after its start." } });
+    const job = startDownload({ url: body.url, outDir, quality: body.quality, clip });
     return send(res, 200, publicJob(job));
   }
 

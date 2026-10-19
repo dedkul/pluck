@@ -1,7 +1,7 @@
 // Pluck panel. Talks to the local engine for downloading, and to Premiere for importing.
 
 const CONFIG = {
-  version: "0.1.0",
+  version: "0.2.0",
   xHandle: "feat.ashish", // TODO: confirm. X handles can't contain dots.
   repo: "https://github.com/dedkul/pluck",
   engine: "http://127.0.0.1:47821",
@@ -23,6 +23,12 @@ function fmt(s) {
   s = Math.max(0, Math.round(s || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
+}
+// "12:30" -> 750, "1:02:45" -> 3765, "90" -> 90. Returns null if it can't be read.
+function parseT(str) {
+  const parts = String(str || "").trim().split(":");
+  if (parts.length > 3 || parts.some(p => !/^\d+(\.\d+)?$/.test(p))) return null;
+  return parts.reduce((total, p) => total * 60 + Number(p), 0);
 }
 function esc(s) { return String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
@@ -89,7 +95,14 @@ async function importIntoPremiere(file) {
 }
 
 /* ---------------- State ---------------- */
-const S = { view: "checking", url: "", info: null, quality: settings.quality, job: null, poll: null, error: null, file: null };
+const S = { view: "checking", url: "", info: null, quality: settings.quality, job: null, poll: null, error: null, file: null,
+  mode: "full", start: 0, end: 0 };
+
+// Long videos (over 10 min) open in clip mode: people rarely want all of a long video.
+function clipDefaults(info) {
+  const d = info.duration || 0;
+  return { mode: d > 600 ? "clip" : "full", start: 0, end: Math.min(60, d) };
+}
 
 function go(view, patch) {
   Object.assign(S, patch || {}, { view });
@@ -168,7 +181,7 @@ async function lookup(raw) {
   try {
     const info = await api("/info", { url });
     if (S.view !== "loading" || S.url !== url) return;
-    go("ready", { info });
+    go("ready", Object.assign({ info }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
     if (!(await engineHealth())) return go("offline");
@@ -200,10 +213,118 @@ function videoCard(withChange) {
     </div>`;
 }
 
+function clipSection() {
+  const dur = S.info.duration;
+  if (!dur) return ""; // Live streams and some sites don't report a length, so clipping isn't offered.
+  return `
+    <div class="seg" id="seg">
+      <div class="seg-btn ${S.mode === "full" ? "on" : ""}" data-m="full">Full video · ${fmt(dur)}</div>
+      <div class="seg-btn ${S.mode === "clip" ? "on" : ""}" data-m="clip">Just a clip</div>
+    </div>
+    <div id="clipBox" class="${S.mode === "clip" ? "" : "hidden"}">
+      <div class="range" id="range">
+        <div class="track"></div><div class="fill" id="fill"></div>
+        <div class="handle" id="hA"></div><div class="handle" id="hB"></div>
+      </div>
+      <div class="scale"><span>0:00</span><span>${fmt(dur / 2)}</span><span>${fmt(dur)}</span></div>
+      <div class="times">
+        <div class="time"><div class="label">Start</div><sp-textfield id="tA"></sp-textfield></div>
+        <span class="arrow">→</span>
+        <div class="time"><div class="label">End</div><sp-textfield id="tB"></sp-textfield></div>
+      </div>
+      <div class="hint err hidden" id="timeErr"></div>
+      <div class="cliplen">
+        <span class="sub">Clip length <b id="len"></b></span>
+        <span class="spacer"></span>
+        ${dur > 60 ? [[15, "15s"], [30, "30s"], [60, "1m"]].map(([l, t]) => `<sp-action-button size="s" class="quick" data-l="${l}">${t}</sp-action-button>`).join("") : ""}
+      </div>
+    </div>
+    <div class="divider"></div>`;
+}
+
+// One place that keeps the slider, the time fields, the length and the button text in step.
+// Adds or removes a class (default "hidden"). UXP's classList.toggle doesn't reliably take the second argument.
+function showIf(el, on, cls) { if (on) el.classList.add(cls || "hidden"); else el.classList.remove(cls || "hidden"); }
+
+function updateClip() {
+  const clip = S.mode === "clip";
+  if ($("fill")) {
+    const dur = S.info.duration, a = (S.start / dur) * 100, b = (S.end / dur) * 100;
+    $("fill").style.left = a + "%"; $("fill").style.width = b - a + "%";
+    $("hA").style.left = a + "%"; $("hB").style.left = b + "%";
+    $("tA").value = fmt(S.start); $("tB").value = fmt(S.end);
+    $("len").textContent = fmt(S.end - S.start);
+  }
+  const audio = S.quality === "audio";
+  $("download").textContent = clip
+    ? `Download ${audio ? "audio clip" : "clip"} (${fmt(S.end - S.start)})`
+    : audio ? "Download audio" : "Download video";
+}
+
+// Move one end of the clip, keeping at least 1 second between start and end.
+function setT(which, t) {
+  const dur = S.info.duration;
+  if (which === "A") S.start = Math.max(0, Math.min(t, S.end - 1));
+  else S.end = Math.min(dur, Math.max(t, S.start + 1));
+  updateClip();
+}
+
+function bindClip() {
+  if (!$("seg")) return;
+  document.querySelectorAll(".seg-btn").forEach(b => b.addEventListener("click", () => {
+    S.mode = b.getAttribute("data-m");
+    document.querySelectorAll(".seg-btn").forEach(x => showIf(x, x === b, "on"));
+    showIf($("clipBox"), S.mode !== "clip");
+    updateClip();
+  }));
+
+  // The slider is plain boxes: Spectrum's slider only has one handle. Whichever handle is closer to the
+  // pointer moves. Move/up listen on the whole document so dragging past the slider's edge still works.
+  const range = $("range"), dur = S.info.duration;
+  const tFromX = x => { const r = range.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * dur); };
+  let dragging = null;
+  const onMove = e => { if (dragging) setT(dragging, tFromX(e.clientX)); };
+  const onUp = () => {
+    if (dragging) $("h" + dragging).classList.remove("drag");
+    dragging = null;
+    document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", onUp);
+  };
+  range.addEventListener("pointerdown", e => {
+    const t = tFromX(e.clientX);
+    dragging = e.target.id === "hA" ? "A" : e.target.id === "hB" ? "B" : Math.abs(t - S.start) <= Math.abs(t - S.end) ? "A" : "B";
+    $("h" + dragging).classList.add("drag");
+    setT(dragging, t);
+    document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", onUp);
+  });
+
+  [["tA", "A"], ["tB", "B"]].forEach(([id, which]) => {
+    const field = $(id);
+    const commit = () => {
+      const t = parseT(field.value), err = $("timeErr");
+      const problem = t === null ? "Use a time like 12:30 or 1:02:45." : t > dur ? `The video is only ${fmt(dur)} long.` : "";
+      err.textContent = problem; showIf(err, !problem);
+      if (problem) { field.setAttribute("invalid", ""); return; }
+      field.removeAttribute("invalid");
+      setT(which, t);
+    };
+    field.addEventListener("change", commit);
+    field.addEventListener("keydown", e => { if (e.key === "Enter") commit(); });
+  });
+
+  // Quick lengths keep the start where it is; near the end of the video they pull the start back instead.
+  document.querySelectorAll(".quick").forEach(b => b.addEventListener("click", () => {
+    const l = Number(b.getAttribute("data-l"));
+    S.end = Math.min(dur, S.start + l);
+    S.start = Math.max(0, S.end - l);
+    updateClip();
+  }));
+}
+
 function vReady() {
   const items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
   main.innerHTML = `
     ${videoCard(true)}
+    ${clipSection()}
     <div class="opts">
       <div>
         <div class="label">Quality</div>
@@ -219,21 +340,25 @@ function vReady() {
       </div>
     </div>
     <div class="action">
-      <sp-button id="download" variant="cta" class="full">${S.quality === "audio" ? "Download audio" : "Download video"}</sp-button>
+      <sp-button id="download" variant="cta" class="full"></sp-button>
       <div class="sub">Saved next to your project and added to “${esc(settings.bin)}”</div>
     </div>`;
   $("change").addEventListener("click", () => go("empty", { url: "", info: null }));
   $("quality").addEventListener("change", e => {
     S.quality = items[e.target.selectedIndex][0];
-    $("download").textContent = S.quality === "audio" ? "Download audio" : "Download video";
+    updateClip();
   });
   $("download").addEventListener("click", startDownload);
+  bindClip();
+  updateClip();
 }
 
 async function startDownload() {
   const outDir = await downloadFolder();
   try {
-    const job = await api("/download", { url: S.info.url, quality: S.quality, outDir });
+    const clip = S.mode === "clip" ? { start: S.start, end: S.end } : {};
+    const job = await api("/download", Object.assign({ url: S.info.url, quality: S.quality, outDir }, clip));
+    S.startedAt = Date.now();
     go("downloading", { job });
     S.poll = setInterval(pollJob, 500);
   } catch (e) {
@@ -244,10 +369,10 @@ async function startDownload() {
 function vDownloading() {
   main.innerHTML = `
     ${videoCard(false)}
-    <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+    <div class="bar ${S.mode === "clip" ? "hidden" : ""}"><div class="bar-fill" id="barFill"></div></div>
     <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
     <div class="steps">
-      <div class="step" id="st0"><span class="dot"></span>Downloading</div>
+      <div class="step" id="st0"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
       <div class="step" id="st1"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
     </div>
     <div class="action"><sp-button id="cancel" variant="secondary" class="full">Cancel</sp-button></div>`;
@@ -270,7 +395,11 @@ async function pollJob() {
   try { job = await api(`/jobs/${S.job.id}`); } catch (e) { clearInterval(S.poll); return go("offline"); }
   if (S.view !== "downloading") return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
-  if (job.status === "downloading") {
+  // yt-dlp can't report a percentage while cutting a clip, so show time spent instead of a bar that never moves.
+  if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
+    label.textContent = `Cutting your clip · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
+    right.textContent = "";
+  } else if (job.status === "downloading") {
     fill.style.width = job.percent * 0.9 + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
     right.textContent = job.speed || "";

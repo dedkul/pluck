@@ -104,3 +104,24 @@ code { font-family: Menlo, monospace; font-size: 11px; color: var(--text); }
 .links sp-link, .links span { margin: 0 3px; font-size: 11px; }
 
 .toast { position: absolute; left: 14px; right: 14px; bottom: 14px; background-color: #3a3a3a; color: #fff; padding: 8px 10px; border-radius: 5px; font-size: 11px; text-align: center; }
+
+/* Full video / Just a clip (v0.2) */
+.seg { display: flex; flex-direction: row; margin-top: 16px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background-color: rgba(0, 0, 0, 0.2); }
+.seg-btn { flex: 1; text-align: center; padding: 6px; border-radius: 4px; color: var(--muted); cursor: pointer; }
+.seg-btn.on { background-color: rgba(255, 255, 255, 0.1); color: var(--text); }
+
+/* Two-handle range slider, built from plain boxes */
+.range { position: relative; height: 28px; margin: 14px 9px 4px; cursor: pointer; }
+.range .track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; background-color: #3a3a3a; border-radius: 2px; }
+.range .fill { position: absolute; top: 12px; height: 4px; background-color: var(--accent); border-radius: 2px; }
+.range .handle { position: absolute; top: 5px; width: 14px; height: 14px; margin-left: -9px; border-radius: 9px;
+  background-color: #f1f1f1; border: 2px solid var(--accent); }
+.range .handle.drag { background-color: #ffffff; border-color: #ffffff; }
+.scale { display: flex; flex-direction: row; justify-content: space-between; color: var(--dim); font-size: 10px; margin: 0 9px; }
+.times { display: flex; flex-direction: row; align-items: flex-end; margin-top: 12px; }
+.time { flex: 1; }
+.time sp-textfield { width: 100%; }
+.times .arrow { color: var(--dim); padding: 0 8px 8px; }
+.cliplen { display: flex; flex-direction: row; align-items: center; margin-top: 10px; }
+.cliplen b { color: var(--text); }
+.quick { margin-left: 4px; }

@@ -114,6 +114,28 @@ I gave Claude's plan to Codex for a second opinion, then checked its sources.
 - **Not yet verified:** the panel running inside Premiere itself (needs a manual load in Adobe's developer tool).
 - **Design changes from the prototype:** no Search/GIFs/History tabs yet (roadmap), no clip trimming yet (v0.2). Uses Adobe's own UI components so it matches Premiere's look.
 
+## Entry 11 — v0.2: "Just a clip"
+*2026-10-19*
+
+- **Problem:** Editors usually need 20 seconds of a video, not all of it. Downloading a whole hour-long video to use one quote wastes minutes and gigabytes.
+- **Decision:** In the ready screen, a **Full video / Just a clip** switch. Clip mode has a slider with two handles, Start and End boxes that stay in sync with it, a clip-length readout, and 15s / 30s / 1m quick buttons. Videos longer than 10 minutes open in clip mode. Pluck then fetches **only that stretch** from the site and names the file `Title [00-05-00 to 00-06-00] [id].mp4`.
+- **Why the edges are re-cut:** Videos can normally only be cut cleanly at certain "anchor" frames a few seconds apart. Pluck asks for the edges to be rebuilt so the clip starts on the exact second you picked, not at the nearest anchor. It costs a little time; a clip that starts 3 seconds early is worse.
+- **Measured (60-second clips, real downloads):**
+
+  | | Big Buck Bunny (10 min, 720p) | NASA briefing (58 min, 1080p) |
+  |---|---|---|
+  | Click → file ready | 48 s | 43 s |
+  | Clip length (asked 60 s) | 60.000 s | 60.06 s |
+  | First frame vs. source | exact frame | within 1 frame (1/30 s) |
+  | Audio vs. source | exact (0 ms) | exact (0 ms) |
+
+  An audio-only 30-second clip took 4.5 s and came out at exactly 30.000 s.
+- **What the numbers say:** Time depends on clip length, not video length: the 1-hour video was no slower. Sound and picture stay in sync. Big Buck Bunny is 720p because that's the best the upload offers.
+- **Surprise:** While cutting a clip, the downloader reports no percentage, only "done" at the end. A progress bar would sit at 0% for 45 seconds and look broken. So clip downloads hide the bar and show seconds spent ("Cutting your clip · 12s") instead of a fake percentage.
+- **How sync was checked:** compared the clip's first second, frame by frame and sound wave by sound wave, against the same moment pulled straight from the source.
+- **UXP limits:** Adobe's built-in slider has one handle, so the two-handle slider is built from plain boxes. The handles can't be moved with arrow keys yet; typing in the Start/End boxes is the keyboard route.
+- **Not yet verified:** the clip controls inside Premiere itself (dragging, typing, the download button). Needs a manual load in Adobe's developer tool.
+
 ---
 
 ## Roadmap (reordered after Entry 7)

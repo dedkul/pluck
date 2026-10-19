@@ -1,6 +1,6 @@
 {
   "name": "pluck-engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local helper that runs yt-dlp for the Pluck Premiere Pro panel",
   "main": "server.js",
   "private": true,
