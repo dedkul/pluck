@@ -43,7 +43,7 @@ brew install node yt-dlp ffmpeg
 ## Feedback
 
 - Bugs and feature requests: [open an issue](https://github.com/dedkul/pluck/issues)
-- Say hi or follow along on X: [@feat.ashish](https://x.com/feat.ashish)
+- Say hi or follow along on X: [@feat_ashish](https://x.com/feat_ashish)
 
 ## Please download responsibly
 

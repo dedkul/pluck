@@ -2,7 +2,7 @@
 
 const CONFIG = {
   version: "0.2.0",
-  xHandle: "feat.ashish", // TODO: confirm. X handles can't contain dots.
+  xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
   engine: "http://127.0.0.1:47821",
 };

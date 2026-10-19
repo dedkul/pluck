@@ -29,6 +29,10 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 12px; }
 
 main { padding: 14px; }
 
+/* Docked panels ignore the manifest's maximumSize, so cap the content itself and center it. */
+.top, main, .sheet > * { max-width: 480px; margin-left: auto; margin-right: auto; }
+.top { box-sizing: border-box; }
+
 /* Paste */
 .field { display: flex; flex-direction: row; align-items: center; }
 .field sp-textfield { flex: 1; margin-right: 6px; }

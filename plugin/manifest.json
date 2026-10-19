@@ -16,7 +16,7 @@
       "id": "pluckPanel",
       "label": { "default": "Pluck" },
       "minimumSize": { "width": 260, "height": 360 },
-      "maximumSize": { "width": 900, "height": 2000 },
+      "maximumSize": { "width": 480, "height": 2000 },
       "preferredDockedSize": { "width": 340, "height": 600 },
       "preferredFloatingSize": { "width": 360, "height": 620 }
     }
