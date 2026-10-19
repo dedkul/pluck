@@ -1,44 +1,55 @@
 # Pluck
 
-Paste a video link inside Premiere Pro. Pluck downloads it and drops it straight into your project.
+Paste a video link inside Premiere Pro. Pluck downloads it (or just the part you need) and drops it straight into your project.
 
-Works with YouTube, X/Twitter, Instagram, TikTok, Vimeo and [many more sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Works with YouTube, X/Twitter, Instagram, TikTok, Vimeo and [many more sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org).
 
-> **Status: v0.1, early and Mac-only.** Trimming, search and GIFs are on the [roadmap](DESIGN_LOG.md#roadmap-reordered-after-entry-7).
+> **Status: v0.3, early.** Tested on macOS. Windows support is written but not yet tested. Search and GIFs are on the [roadmap](DESIGN_LOG.md).
 
-## How it works
+## Features
 
-Premiere's plugin system (UXP) isn't allowed to run other programs, so Pluck has two parts:
-
-- **`plugin/`**: the panel inside Premiere. You paste a link here.
-- **`engine/`**: a small helper that runs on your Mac and does the downloading.
-
-```
-Premiere panel  →  local engine (127.0.0.1)  →  yt-dlp  →  file saved next to your project  →  imported into a bin
-```
+- Paste a link, see the title and thumbnail, and download.
+- **Just a clip:** pick a start and end time to download only that part of a long video.
+- Downloads land in a `Web Downloads` folder next to your project and get imported into a bin.
+- Prefers MP4 files that Premiere plays without converting.
+- **Nothing else to install:** yt-dlp and FFmpeg ship inside the extension.
 
 ## Requirements
 
-- Premiere Pro **25.6 or newer** (2025 / 2026)
-- macOS with [Homebrew](https://brew.sh)
-- Node.js, yt-dlp and ffmpeg:
+- Premiere Pro **2022 (22.0) or newer**
+- macOS or Windows (64-bit)
 
-```bash
-brew install node yt-dlp ffmpeg
+## Install (developer build, for now)
+
+A one-click installer is coming. Until then:
+
+1. Download the tools into the extension:
+   ```bash
+   scripts/fetch-tools.sh
+   ```
+2. Let Premiere load unsigned extensions (macOS):
+   ```bash
+   defaults write com.adobe.CSXS.11 PlayerDebugMode 1 && defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+   ```
+3. Link the extension into Adobe's extensions folder (macOS):
+   ```bash
+   ln -s "$PWD/extension" ~/Library/Application\ Support/Adobe/CEP/extensions/com.dedkul.pluck
+   ```
+4. Restart Premiere, then open **Window → Extensions → Pluck**.
+
+## How it's built
+
+Pluck is a CEP extension: an HTML panel with Node.js built in. The panel runs the bundled yt-dlp and FFmpeg directly, then asks Premiere (through ExtendScript) to import the file.
+
+```
+extension/
+  index.html, main.js, styles.css   the panel
+  lib/engine.js                     runs yt-dlp and FFmpeg
+  host/premiere.jsx                 imports files into a Premiere bin
+  bin/mac, bin/win                  bundled tools (fetched by scripts/fetch-tools.sh, not in git)
 ```
 
-## Install (developer mode, for now)
-
-1. In Premiere: **Settings → Plugins → Enable developer mode**, then restart Premiere.
-2. Open **Adobe UXP Developer Tools** → **Add Plugin** → choose `plugin/manifest.json` → **Load**.
-3. In Premiere: **Window → UXP Plugins → Pluck**.
-4. Press **Start engine** in the panel (or double-click `plugin/start-engine.command`). Keep the Terminal window open.
-
-## Use it
-
-1. Save your Premiere project (downloads go in a `Web Downloads` folder next to it).
-2. Paste a link and press **Get**.
-3. Pick a quality and press **Download**. The video lands in the **Web Downloads** bin.
+Adobe is retiring CEP (off by default from December 2028). The plan is to move to a UXP Hybrid plugin before then. The [design log](DESIGN_LOG.md) has the full story.
 
 ## Feedback
 
@@ -47,8 +58,8 @@ brew install node yt-dlp ffmpeg
 
 ## Please download responsibly
 
-Only download videos you have the right to use. Many platforms' terms forbid downloading, and most videos are copyrighted. Pluck saves the source link with each file so you can credit creators.
+Only download videos you have the right to use. Many platforms' terms forbid downloading, and most videos are copyrighted.
 
 ## License
 
-MIT
+MIT for Pluck's own code. The bundled tools have their own licenses: yt-dlp is [Unlicense](https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE) and FFmpeg builds are [GPL](https://ffmpeg.org/legal.html).

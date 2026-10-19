@@ -136,6 +136,23 @@ I gave Claude's plan to Codex for a second opinion, then checked its sources.
 - **UXP limits:** Adobe's built-in slider has one handle, so the two-handle slider is built from plain boxes. The handles can't be moved with arrow keys yet; typing in the Start/End boxes is the keyboard route.
 - **Not yet verified:** the clip controls inside Premiere itself (dragging, typing, the download button). Needs a manual load in Adobe's developer tool.
 
+## Entry 12 — Back to CEP: one install, nothing extra
+*2026-10-19*
+
+- **Problem:** The UXP version needed a separate helper running in a Terminal window. Your point: if people have to install and run extra software anyway, why not just use any downloader app? **A plugin's whole value is that it lives inside Premiere.** A second piece of software breaks that promise.
+- **Options:**
+  - **CEP:** the panel has Node.js built in, so it can run yt-dlp and ffmpeg packed inside the plugin. Works in Premiere 2022 and newer. Adobe turns it off by default in Dec 2028.
+  - **UXP Hybrid:** UXP plus a small C++ part (available in Premiere since April 2026). Future-proof, but needs C++ built separately for Mac and Windows. Premiere 2025.6+ only.
+  - **UXP + hidden helper:** an installer that starts the helper silently. Still a background app, and still a lot of packaging work.
+- **Decision:** **CEP**, with yt-dlp and ffmpeg bundled inside.
+- **Why:** It delivers "install one thing, it works" today, and brings back Premiere 2022–2024 users (your original wish). The code that matters carries over: the download logic is its own file (`lib/engine.js`), ready to reuse in a UXP Hybrid version.
+- **Cost we accept:** A rebuild as UXP Hybrid before Dec 2028. The plugin grows by about 115 MB because of the bundled tools.
+- **Lesson:** I changed my recommendation twice (CEP → UXP → CEP). Each change came from a new fact: Adobe's shutdown dates, then your "no extra software" rule. The rule mattered more than the tech. The question to ask first was "what does the user have to do?", not "what's newest?"
+- **Bundled tools:** downloaded only from sources yt-dlp and ffmpeg.org officially point to, with checksums verified where they're published.
+- **Known gaps:**
+  - The Mac ffmpeg (evermeet.cx) is an Intel build. On Apple Silicon it runs through Rosetta. Macs without Rosetta will need a native build before release.
+  - Bundled tools aren't signed by us yet. macOS may block them when installed from a downloaded file. That gets solved when we package the installer.
+
 ---
 
 ## Roadmap (reordered after Entry 7)
@@ -145,14 +162,15 @@ I gave Claude's plan to Codex for a second opinion, then checked its sources.
 | **v0.0** | HTML design prototype (`prototype/index.html`). No real downloading. |
 | **v0.1** | Paste a YouTube link → download → auto-import into a "Web Downloads" bin. Mac. |
 | **v0.2** | Trim: range slider + timestamp boxes. Measure speed and audio sync. |
-| **v0.3** | X + Instagram, quality picker, progress, clear errors, Windows |
-| **v0.4** | In-panel YouTube search, GIF search (GIPHY), download history |
-| **v1.0** | Thumbnail strip, auto-update yt-dlp, installer for Mac + Windows |
-| **Later** | UXP version for future Premiere; transcript search to find a quote and clip it |
+| **v0.3** | Switch to CEP with yt-dlp + ffmpeg built in: nothing extra to install. Premiere 2022+. |
+| **v0.4** | Test X + Instagram, Windows; in-panel YouTube search, GIF search (GIPHY), download history |
+| **v1.0** | Signed one-click installer for Mac + Windows, native Apple Silicon ffmpeg, auto-update yt-dlp |
+| **By late 2028** | Rebuild as a UXP Hybrid plugin before CEP is switched off; transcript search to find a quote and clip it |
 
 ## Open risks
 
 - Sites change → downloads break until yt-dlp updates. Need auto-update.
 - Instagram and some X videos need the user to be logged in.
 - Downloading breaks platform terms. Personal-use tool, shared on GitHub, not Adobe's marketplace.
-- Unsigned helper programs may be blocked by macOS and Windows security.
+- Unsigned bundled tools may be blocked by macOS and Windows security until we sign the installer.
+- CEP is switched off by default in Dec 2028 and removed in Dec 2029.

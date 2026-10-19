@@ -4,3 +4,4 @@ engine/bin/
 *.part
 *.ytdl
 CLAUDE.md
+extension/bin/

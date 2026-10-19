@@ -1,14 +1,53 @@
-// Pluck panel. Talks to the local engine for downloading, and to Premiere for importing.
+// Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.2.0",
+  version: "0.3.0",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
-  engine: "http://127.0.0.1:47821",
 };
 
-const ppro = require("premierepro");
-const uxp = require("uxp");
+/* ---------------- CEP bridges ---------------- */
+const cep = window.__adobe_cep__;
+
+// Same conversion Adobe's CSInterface.getSystemPath does: "file:///Users/..." -> "/Users/...".
+function extensionRoot() {
+  const p = decodeURI(cep.getSystemPath("extension"));
+  return /^file:\/\/\/[A-Za-z]:/.test(p) ? p.replace("file:///", "") : p.replace("file://", "");
+}
+
+// Call a function in host/premiere.jsx. Arguments go in as JSON literals, results come back as JSON.
+function host(fn, ...args) {
+  return new Promise(resolve => {
+    cep.evalScript(`${fn}(${args.map(a => JSON.stringify(a)).join(",")})`, raw => {
+      try { resolve(JSON.parse(raw)); } catch (e) { resolve({ ok: false, message: "Premiere didn't respond. Try again." }); }
+    });
+  });
+}
+
+function openUrl(url) {
+  try { window.cep.util.openURLInDefaultBrowser(url); } catch (e) { toast("Couldn't open the link"); }
+}
+
+// Match Premiere's panel color (it changes with the user's brightness setting).
+function matchPremiereTheme() {
+  try {
+    const c = JSON.parse(cep.getHostEnvironment()).appSkinInfo.panelBackgroundColor.color;
+    const rgb = `rgb(${Math.round(c.red)}, ${Math.round(c.green)}, ${Math.round(c.blue)})`;
+    document.documentElement.style.setProperty("--bg", rgb);
+  } catch (e) {}
+}
+
+// Some Premiere versions swallow ⌘V before the panel sees it, so the Paste button reads the clipboard directly.
+function readClipboard() {
+  const { execFileSync } = require("child_process");
+  try {
+    return process.platform === "win32"
+      ? execFileSync("powershell", ["-NoProfile", "-Command", "Get-Clipboard"], { encoding: "utf8" }).trim()
+      : execFileSync("pbpaste", { encoding: "utf8" }).trim();
+  } catch (e) { return ""; }
+}
+
+const engine = require(extensionRoot() + "/lib/engine.js").createEngine(extensionRoot());
 
 /* ---------------- Settings (remembered between sessions) ---------------- */
 function load(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } }
@@ -35,67 +74,24 @@ function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 function dirName(p) { const parts = String(p).split(/[\\/]/); parts.pop(); return parts.join("/"); }
 let toastTimer;
 function toast(msg) {
-  const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add("hidden"), 2200);
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2200);
 }
-function openUrl(url) { uxp.shell.openExternal(url).catch(() => toast("Couldn't open the link")); }
-
-/* ---------------- Engine API ---------------- */
-async function api(path, body) {
-  const opts = body
-    ? { method: "POST", headers: { "Content-Type": "application/json", "X-Pluck": "1" }, body: JSON.stringify(body) }
-    : {};
-  const res = await fetch(CONFIG.engine + path, opts);
-  const data = await res.json();
-  if (!res.ok) throw (data.error && data.error.message ? data.error : { code: "unknown", message: "Something went wrong." });
-  return data;
-}
-async function engineHealth() { try { return await api("/health"); } catch (e) { return null; } }
 
 /* ---------------- Premiere ---------------- */
-async function activeProject() {
-  try { return await ppro.Project.getActiveProject(); } catch (e) { return null; }
-}
-
-// Downloads go in "<project folder>/Web Downloads". Unsaved projects fall back to ~/Movies/Pluck (decided by the engine).
+// Downloads go in "<project folder>/Web Downloads". Unsaved projects fall back to ~/Movies/Pluck.
 async function downloadFolder() {
-  const project = await activeProject();
-  const p = project && project.path;
-  return p ? dirName(p) + "/Web Downloads" : null;
-}
-
-async function findBin(root, name) {
-  const items = await root.getItems();
-  for (const item of items) {
-    if (item.name !== name) continue;
-    try { const folder = ppro.FolderItem.cast(item); if (folder) return folder; } catch (e) {}
-  }
-  return null;
-}
-
-async function getOrCreateBin(project, name) {
-  const root = await project.getRootItem();
-  let bin = await findBin(root, name);
-  if (bin) return bin;
-  try {
-    project.lockedAccess(() => {
-      project.executeTransaction(compound => { compound.addAction(root.createBinAction(name, false)); }, `Create ${name} bin`);
-    });
-    bin = await findBin(root, name);
-  } catch (e) { console.log("Bin creation failed", e); }
-  return bin || root;
+  const r = await host("pluckProjectPath");
+  return r.path ? dirName(r.path) + "/Web Downloads" : null;
 }
 
 async function importIntoPremiere(file) {
-  const project = await activeProject();
-  if (!project) throw { message: "Open a Premiere project first, then try again." };
-  const bin = await getOrCreateBin(project, settings.bin);
-  const ok = await project.importFiles([file], true, bin, false);
-  if (!ok) throw { message: "Premiere couldn't import the file. It's saved here: " + file };
+  const r = await host("pluckImport", file, settings.bin);
+  if (!r.ok) throw { message: r.message };
 }
 
 /* ---------------- State ---------------- */
-const S = { view: "checking", url: "", info: null, quality: settings.quality, job: null, poll: null, error: null, file: null,
+const S = { view: "empty", url: "", info: null, quality: settings.quality, job: null, poll: null, error: null, file: null,
   mode: "full", start: 0, end: 0 };
 
 // Long videos (over 10 min) open in clip mode: people rarely want all of a long video.
@@ -111,54 +107,29 @@ function go(view, patch) {
 }
 
 function render() {
-  ({ checking: vChecking, offline: vOffline, empty: vEmpty, loading: vLoading, ready: vReady,
-     downloading: vDownloading, done: vDone, error: vError })[S.view]();
+  ({ empty: vEmpty, loading: vLoading, ready: vReady, downloading: vDownloading, done: vDone, error: vError })[S.view]();
 }
 
 /* ---------------- Views ---------------- */
-function vChecking() { main.innerHTML = `<div class="sub center" style="padding:40px 0">Starting Pluck…</div>`; }
-
-function vOffline() {
-  main.innerHTML = `
-    <div class="card offline">
-      <div class="result-title" style="text-align:left">The download engine isn't running</div>
-      <div class="result-text" style="text-align:left">Pluck uses a small helper app to download videos. Start it once and keep its window open.</div>
-      <div class="action"><sp-button id="startEngine" variant="cta" class="full">Start engine</sp-button></div>
-      <ol>
-        <li>Your Mac asks if Pluck can open <code>start-engine.command</code>. Click Allow.</li>
-        <li>A Terminal window opens. Leave it open.</li>
-        <li>Come back here and press <b>Check again</b>.</li>
-      </ol>
-      <div class="action"><sp-button id="recheck" variant="secondary" class="full">Check again</sp-button></div>
-    </div>`;
-  $("startEngine").addEventListener("click", startEngine);
-  $("recheck").addEventListener("click", boot);
-}
-
-async function startEngine() {
-  try {
-    const folder = await uxp.storage.localFileSystem.getPluginFolder();
-    await uxp.shell.openPath(folder.nativePath + "/start-engine.command");
-    toast("Starting engine…");
-    setTimeout(boot, 3000);
-  } catch (e) {
-    toast("Couldn't start it automatically. Double-click start-engine.command in the plugin folder.");
-  }
-}
-
 function pasteRow(error) {
   return `
-    <div class="label">Paste a video link</div>
+    <label class="label" for="url">Paste a video link</label>
     <div class="field">
-      <sp-textfield id="url" placeholder="https://…" value="${esc(S.url)}"></sp-textfield>
-      <sp-button id="get" variant="cta">Get</sp-button>
+      <input class="input ${error ? "bad" : ""}" id="url" placeholder="https://…" value="${esc(S.url)}" spellcheck="false">
+      <button class="btn" id="paste" title="Paste from clipboard">Paste</button>
+      <button class="btn primary" id="get">Get</button>
     </div>
-    ${error ? `<div class="hint err">${esc(error)}</div>` : `<div class="hint">Paste with ⌘V, then press Enter.</div>`}`;
+    ${error ? `<div class="hint err">${esc(error)}</div>` : `<div class="hint">Copy a link in your browser, then click Paste.</div>`}`;
 }
 function bindPaste() {
   const field = $("url");
   const submit = () => lookup(field.value);
   $("get").addEventListener("click", submit);
+  $("paste").addEventListener("click", () => {
+    const text = readClipboard();
+    if (!text) return toast("Your clipboard is empty");
+    field.value = text; submit();
+  });
   field.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
 }
 
@@ -179,12 +150,11 @@ async function lookup(raw) {
   if (!/^https?:\/\//i.test(url)) return vEmpty("That doesn't look like a link. Copy the full address from your browser.");
   go("loading");
   try {
-    const info = await api("/info", { url });
+    const info = await engine.info(url);
     if (S.view !== "loading" || S.url !== url) return;
     go("ready", Object.assign({ info }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
-    if (!(await engineHealth())) return go("offline");
     go("error", { error: e });
   }
 }
@@ -192,23 +162,22 @@ async function lookup(raw) {
 function vLoading() {
   main.innerHTML = `${pasteRow()}
     <div class="card vid" style="margin-top:14px">
-      <div class="thumb"></div>
-      <div class="vid-meta"><div class="sub">Looking up video…</div></div>
+      <div class="thumb skeleton"></div>
+      <div class="vid-meta"><div class="skeleton" style="height:11px;margin-bottom:6px"></div><div class="skeleton" style="height:11px;width:60%;margin-bottom:8px"></div><div class="sub">Looking up video…</div></div>
     </div>`;
   bindPaste();
 }
 
 function videoCard(withChange) {
   const v = S.info;
-  const thumb = v.thumbnail ? `<img src="${CONFIG.engine}/thumb?u=${encodeURIComponent(v.thumbnail)}">` : "";
   return `
     <div class="card vid">
-      <div class="thumb">${thumb}${v.duration ? `<span class="dur">${fmt(v.duration)}</span>` : ""}</div>
+      <div class="thumb">${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="">` : ""}${v.duration ? `<span class="dur">${fmt(v.duration)}</span>` : ""}</div>
       <div class="vid-meta">
         <div class="platform">${esc(v.platform)}</div>
         <div class="vid-title">${esc(v.title)}</div>
         <div class="vid-by">${esc(v.uploader)}</div>
-        ${withChange ? `<div class="vid-change" id="change">Use a different link</div>` : ""}
+        ${withChange ? `<button class="vid-change" id="change">Use a different link</button>` : ""}
       </div>
     </div>`;
 }
@@ -218,41 +187,39 @@ function clipSection() {
   if (!dur) return ""; // Live streams and some sites don't report a length, so clipping isn't offered.
   return `
     <div class="seg" id="seg">
-      <div class="seg-btn ${S.mode === "full" ? "on" : ""}" data-m="full">Full video · ${fmt(dur)}</div>
-      <div class="seg-btn ${S.mode === "clip" ? "on" : ""}" data-m="clip">Just a clip</div>
+      <button class="${S.mode === "full" ? "on" : ""}" data-m="full">Full video · ${fmt(dur)}</button>
+      <button class="${S.mode === "clip" ? "on" : ""}" data-m="clip">Just a clip</button>
     </div>
     <div id="clipBox" class="${S.mode === "clip" ? "" : "hidden"}">
       <div class="range" id="range">
         <div class="track"></div><div class="fill" id="fill"></div>
-        <div class="handle" id="hA"></div><div class="handle" id="hB"></div>
+        <div class="handle" id="hA" tabindex="0" role="slider" aria-label="Clip start"></div>
+        <div class="handle" id="hB" tabindex="0" role="slider" aria-label="Clip end"></div>
       </div>
       <div class="scale"><span>0:00</span><span>${fmt(dur / 2)}</span><span>${fmt(dur)}</span></div>
       <div class="times">
-        <div class="time"><div class="label">Start</div><sp-textfield id="tA"></sp-textfield></div>
+        <div><label class="label" for="tA">Start</label><input class="input" id="tA"></div>
         <span class="arrow">→</span>
-        <div class="time"><div class="label">End</div><sp-textfield id="tB"></sp-textfield></div>
+        <div><label class="label" for="tB">End</label><input class="input" id="tB"></div>
       </div>
       <div class="hint err hidden" id="timeErr"></div>
       <div class="cliplen">
         <span class="sub">Clip length <b id="len"></b></span>
         <span class="spacer"></span>
-        ${dur > 60 ? [[15, "15s"], [30, "30s"], [60, "1m"]].map(([l, t]) => `<sp-action-button size="s" class="quick" data-l="${l}">${t}</sp-action-button>`).join("") : ""}
+        ${dur > 60 ? [[15, "15s"], [30, "30s"], [60, "1m"]].map(([l, t]) => `<button class="btn small quick" data-l="${l}">${t}</button>`).join("") : ""}
       </div>
-    </div>
-    <div class="divider"></div>`;
+    </div>`;
 }
 
 // One place that keeps the slider, the time fields, the length and the button text in step.
-// Adds or removes a class (default "hidden"). UXP's classList.toggle doesn't reliably take the second argument.
-function showIf(el, on, cls) { if (on) el.classList.add(cls || "hidden"); else el.classList.remove(cls || "hidden"); }
-
 function updateClip() {
   const clip = S.mode === "clip";
   if ($("fill")) {
     const dur = S.info.duration, a = (S.start / dur) * 100, b = (S.end / dur) * 100;
     $("fill").style.left = a + "%"; $("fill").style.width = b - a + "%";
     $("hA").style.left = a + "%"; $("hB").style.left = b + "%";
-    $("tA").value = fmt(S.start); $("tB").value = fmt(S.end);
+    if (document.activeElement !== $("tA")) $("tA").value = fmt(S.start);
+    if (document.activeElement !== $("tB")) $("tB").value = fmt(S.end);
     $("len").textContent = fmt(S.end - S.start);
   }
   const audio = S.quality === "audio";
@@ -271,49 +238,48 @@ function setT(which, t) {
 
 function bindClip() {
   if (!$("seg")) return;
-  document.querySelectorAll(".seg-btn").forEach(b => b.addEventListener("click", () => {
-    S.mode = b.getAttribute("data-m");
-    document.querySelectorAll(".seg-btn").forEach(x => showIf(x, x === b, "on"));
-    showIf($("clipBox"), S.mode !== "clip");
+  document.querySelectorAll("#seg button").forEach(b => b.addEventListener("click", () => {
+    S.mode = b.dataset.m;
+    document.querySelectorAll("#seg button").forEach(x => x.classList.toggle("on", x === b));
+    $("clipBox").classList.toggle("hidden", S.mode !== "clip");
     updateClip();
   }));
 
-  // The slider is plain boxes: Spectrum's slider only has one handle. Whichever handle is closer to the
-  // pointer moves. Move/up listen on the whole document so dragging past the slider's edge still works.
+  // Whichever handle is closer to the pointer moves. Pointer capture keeps the drag going past the edges.
   const range = $("range"), dur = S.info.duration;
   const tFromX = x => { const r = range.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * dur); };
   let dragging = null;
-  const onMove = e => { if (dragging) setT(dragging, tFromX(e.clientX)); };
-  const onUp = () => {
-    if (dragging) $("h" + dragging).classList.remove("drag");
-    dragging = null;
-    document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", onUp);
-  };
   range.addEventListener("pointerdown", e => {
     const t = tFromX(e.clientX);
     dragging = e.target.id === "hA" ? "A" : e.target.id === "hB" ? "B" : Math.abs(t - S.start) <= Math.abs(t - S.end) ? "A" : "B";
+    range.setPointerCapture(e.pointerId);
     $("h" + dragging).classList.add("drag");
     setT(dragging, t);
-    document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", onUp);
   });
+  range.addEventListener("pointermove", e => { if (dragging) setT(dragging, tFromX(e.clientX)); });
+  const end = () => { if (dragging) $("h" + dragging).classList.remove("drag"); dragging = null; };
+  range.addEventListener("pointerup", end); range.addEventListener("pointercancel", end);
+  ["A", "B"].forEach(w => $("h" + w).addEventListener("keydown", e => {
+    const step = e.shiftKey ? 10 : 1, cur = w === "A" ? S.start : S.end;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { setT(w, cur - step); e.preventDefault(); }
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") { setT(w, cur + step); e.preventDefault(); }
+  }));
 
   [["tA", "A"], ["tB", "B"]].forEach(([id, which]) => {
     const field = $(id);
     const commit = () => {
       const t = parseT(field.value), err = $("timeErr");
       const problem = t === null ? "Use a time like 12:30 or 1:02:45." : t > dur ? `The video is only ${fmt(dur)} long.` : "";
-      err.textContent = problem; showIf(err, !problem);
-      if (problem) { field.setAttribute("invalid", ""); return; }
-      field.removeAttribute("invalid");
-      setT(which, t);
+      err.textContent = problem; err.classList.toggle("hidden", !problem); field.classList.toggle("bad", !!problem);
+      if (!problem) setT(which, t);
     };
     field.addEventListener("change", commit);
-    field.addEventListener("keydown", e => { if (e.key === "Enter") commit(); });
+    field.addEventListener("keydown", e => { if (e.key === "Enter") { commit(); field.blur(); } });
   });
 
   // Quick lengths keep the start where it is; near the end of the video they pull the start back instead.
   document.querySelectorAll(".quick").forEach(b => b.addEventListener("click", () => {
-    const l = Number(b.getAttribute("data-l"));
+    const l = Number(b.dataset.l);
     S.end = Math.min(dur, S.start + l);
     S.start = Math.max(0, S.end - l);
     updateClip();
@@ -325,14 +291,13 @@ function vReady() {
   main.innerHTML = `
     ${videoCard(true)}
     ${clipSection()}
+    <div class="divider"></div>
     <div class="opts">
       <div>
-        <div class="label">Quality</div>
-        <sp-picker id="quality" class="full">
-          <sp-menu slot="options">
-            ${items.map(([v, l]) => `<sp-menu-item value="${v}" ${v === S.quality ? "selected" : ""}>${l}</sp-menu-item>`).join("")}
-          </sp-menu>
-        </sp-picker>
+        <label class="label" for="quality">Quality</label>
+        <select class="input full" id="quality">
+          ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
       </div>
       <div>
         <div class="label">Import to bin</div>
@@ -340,14 +305,11 @@ function vReady() {
       </div>
     </div>
     <div class="action">
-      <sp-button id="download" variant="cta" class="full"></sp-button>
+      <button class="btn primary big full" id="download"></button>
       <div class="sub">Saved next to your project and added to “${esc(settings.bin)}”</div>
     </div>`;
   $("change").addEventListener("click", () => go("empty", { url: "", info: null }));
-  $("quality").addEventListener("change", e => {
-    S.quality = items[e.target.selectedIndex][0];
-    updateClip();
-  });
+  $("quality").addEventListener("change", e => { S.quality = e.target.value; updateClip(); });
   $("download").addEventListener("click", startDownload);
   bindClip();
   updateClip();
@@ -355,15 +317,11 @@ function vReady() {
 
 async function startDownload() {
   const outDir = await downloadFolder();
-  try {
-    const clip = S.mode === "clip" ? { start: S.start, end: S.end } : {};
-    const job = await api("/download", Object.assign({ url: S.info.url, quality: S.quality, outDir }, clip));
-    S.startedAt = Date.now();
-    go("downloading", { job });
-    S.poll = setInterval(pollJob, 500);
-  } catch (e) {
-    go("error", { error: e });
-  }
+  const clip = S.mode === "clip" ? { start: S.start, end: S.end } : null;
+  const job = engine.download({ url: S.info.url, quality: S.quality, outDir, clip });
+  S.startedAt = Date.now();
+  go("downloading", { job });
+  S.poll = setInterval(pollJob, 400);
 }
 
 function vDownloading() {
@@ -375,30 +333,23 @@ function vDownloading() {
       <div class="step" id="st0"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
       <div class="step" id="st1"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
     </div>
-    <div class="action"><sp-button id="cancel" variant="secondary" class="full">Cancel</sp-button></div>`;
+    <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
   setStep(0);
-  $("cancel").addEventListener("click", async () => {
-    try { await api(`/jobs/${S.job.id}/cancel`, {}); } catch (e) {}
-    go("ready"); toast("Download cancelled");
-  });
+  $("cancel").addEventListener("click", () => { engine.cancel(S.job); go("ready"); toast("Download cancelled"); });
 }
 
 function setStep(n) {
-  [0, 1].forEach(i => {
-    const el = $("st" + i); if (!el) return;
-    el.className = "step" + (i < n ? " done" : i === n ? " active" : "");
-  });
+  [0, 1].forEach(i => { const el = $("st" + i); if (el) el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
 }
 
+let importing = false;
 async function pollJob() {
-  let job;
-  try { job = await api(`/jobs/${S.job.id}`); } catch (e) { clearInterval(S.poll); return go("offline"); }
-  if (S.view !== "downloading") return;
+  const job = S.job;
+  if (S.view !== "downloading" || importing) return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
   // yt-dlp can't report a percentage while cutting a clip, so show time spent instead of a bar that never moves.
   if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
     label.textContent = `Cutting your clip · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
-    right.textContent = "";
   } else if (job.status === "downloading") {
     fill.style.width = job.percent * 0.9 + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
@@ -406,16 +357,17 @@ async function pollJob() {
   } else if (job.status === "processing") {
     fill.style.width = "90%"; label.textContent = "Finishing up…"; right.textContent = "";
   } else if (job.status === "error") {
-    clearInterval(S.poll); go("error", { error: job.error });
+    go("error", { error: job.error });
   } else if (job.status === "done") {
     clearInterval(S.poll);
     fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(1);
+    importing = true;
     try {
       await importIntoPremiere(job.file);
       go("done", { file: job.file });
     } catch (e) {
       go("error", { error: e });
-    }
+    } finally { importing = false; }
   }
 }
 
@@ -426,7 +378,7 @@ function vDone() {
       <div class="result-title">Added to your project</div>
       <div class="result-text">Find it in the “${esc(settings.bin)}” bin.</div>
       <div class="file">${esc(baseName(S.file))}</div>
-      <div class="result-actions"><sp-button id="again" variant="cta">Pluck another</sp-button></div>
+      <div class="result-actions"><button class="btn primary" id="again">Pluck another</button></div>
     </div>`;
   $("again").addEventListener("click", () => go("empty", { url: "", info: null }));
 }
@@ -434,7 +386,8 @@ function vDone() {
 function vError() {
   const e = S.error || {};
   const title = { auth: "This video needs you to sign in", private: "This video is private", age: "Age-restricted video",
-    unsupported: "This site isn't supported yet", unavailable: "Video not available", network: "Connection problem" }[e.code] || "Couldn't get this video";
+    unsupported: "This site isn't supported yet", unavailable: "Video not available", network: "Connection problem",
+    tools: "Pluck's download tool is missing" }[e.code] || "Couldn't get this video";
   main.innerHTML = `
     ${pasteRow()}
     <div class="card result bad" style="margin-top:14px">
@@ -442,8 +395,8 @@ function vError() {
       <div class="result-title">${esc(title)}</div>
       <div class="result-text">${esc(e.message || "Something went wrong.")}</div>
       <div class="result-actions">
-        ${S.url ? `<sp-button id="retry" variant="secondary">Try again</sp-button>` : ""}
-        <sp-button id="reset" variant="cta">New link</sp-button>
+        ${S.url ? `<button class="btn" id="retry">Try again</button>` : ""}
+        <button class="btn primary" id="reset">New link</button>
       </div>
     </div>`;
   bindPaste();
@@ -456,10 +409,10 @@ async function openSettings() {
   $("settings").classList.remove("hidden");
   const folder = await downloadFolder();
   $("setFolder").textContent = folder || "~/Movies/Pluck (save your project to keep media next to it)";
-  const h = await engineHealth();
-  $("engineLed").className = "led " + (h ? "on" : "off");
-  $("engineName").textContent = h ? `Running · yt-dlp ${h.ytdlp}` : "Not running";
-  $("engineSub").textContent = h ? `Engine ${h.engine}${h.ffmpeg ? "" : " · ffmpeg missing"}` : "Start it from the main screen.";
+  const st = engine.status();
+  $("toolsLed").className = "led " + (st.ytdlp && st.ffmpeg ? "on" : "off");
+  $("toolsName").textContent = st.ytdlp ? `yt-dlp ${st.ytdlp}` : "yt-dlp is missing";
+  $("toolsSub").textContent = !st.ffmpeg ? "ffmpeg is missing" : st.bundled ? "Built into Pluck" : "Using tools installed on this computer";
 }
 
 function initSettings() {
@@ -468,27 +421,22 @@ function initSettings() {
 
   const bin = $("setBin");
   bin.value = settings.bin;
-  bin.addEventListener("input", e => { settings.bin = (e.target.value || "").trim() || "Web Downloads"; save("pluck.bin", settings.bin); });
+  bin.addEventListener("input", e => { settings.bin = e.target.value.trim() || "Web Downloads"; save("pluck.bin", settings.bin); });
 
-  const q = ["1080p", "720p", "480p", "audio"];
-  const picker = $("setQuality");
-  picker.selectedIndex = Math.max(0, q.indexOf(settings.quality));
-  picker.addEventListener("change", e => { settings.quality = q[e.target.selectedIndex]; S.quality = settings.quality; save("pluck.quality", settings.quality); });
+  const q = $("setQuality");
+  q.value = settings.quality;
+  q.addEventListener("change", e => { settings.quality = e.target.value; S.quality = settings.quality; save("pluck.quality", settings.quality); });
 
   $("aboutVersion").textContent = "v" + CONFIG.version;
   $("makerHandle").textContent = "@" + CONFIG.xHandle;
   $("followBtn").addEventListener("click", () => openUrl(`https://x.com/intent/follow?screen_name=${CONFIG.xHandle}`));
-  $("bugLink").addEventListener("click", () => openUrl(`${CONFIG.repo}/issues/new?labels=bug`));
-  $("featureLink").addEventListener("click", () => openUrl(`${CONFIG.repo}/issues/new?labels=enhancement`));
-  $("codeLink").addEventListener("click", () => openUrl(CONFIG.repo));
+  const link = (id, url) => $(id).addEventListener("click", e => { e.preventDefault(); openUrl(url); });
+  link("bugLink", `${CONFIG.repo}/issues/new?labels=bug`);
+  link("featureLink", `${CONFIG.repo}/issues/new?labels=enhancement`);
+  link("codeLink", CONFIG.repo);
 }
 
 /* ---------------- Start ---------------- */
-async function boot() {
-  go("checking");
-  const h = await engineHealth();
-  go(h ? "empty" : "offline");
-}
-
+matchPremiereTheme();
 initSettings();
-boot();
+render();
