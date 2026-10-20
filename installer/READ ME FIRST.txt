@@ -1,0 +1,34 @@
+PLUCK: paste a video link inside Premiere Pro, get the video in your project.
+
+Needs Premiere Pro 2022 or newer.
+
+
+INSTALL
+
+1. Unzip this download (don't run anything from inside the zip).
+2. Close Premiere Pro.
+3. Double-click the installer:
+     Mac:      "Install Pluck.command"
+     Windows:  "Install Pluck.bat"
+4. Open Premiere Pro, then Window > Extensions > Pluck.
+
+
+IF YOUR COMPUTER BLOCKS THE INSTALLER
+
+Pluck isn't signed yet (that comes with version 1.0), so your computer may warn you.
+
+  Mac: if it says the file can't be opened, open System Settings > Privacy & Security,
+       scroll down, and click "Open Anyway" next to "Install Pluck.command".
+  Windows: if a blue "Windows protected your PC" box appears,
+       click "More info", then "Run anyway".
+
+
+UNINSTALL
+
+Delete this folder, then restart Premiere Pro:
+  Mac:      ~/Library/Application Support/Adobe/CEP/extensions/com.dedkul.pluck
+  Windows:  %APPDATA%\Adobe\CEP\extensions\com.dedkul.pluck
+
+
+Problems or ideas: https://github.com/dedkul/pluck/issues
+Only download videos you have the right to use.

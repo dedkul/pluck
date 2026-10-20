@@ -6,3 +6,4 @@ engine/bin/
 CLAUDE.md
 extension/bin/
 extension/.debug
+dist/

@@ -169,6 +169,17 @@ First time loading the CEP panel in Premiere. Each fix below is a problem found 
 - **Updates.** *Problem:* people would never know a new version exists. *Decision:* Pluck checks GitHub once a day. If there's a newer release, a slim banner appears ("Pluck 0.4.0 is available. Get update"), and Settings has **Check for updates** / **Download update**. The banner can be dismissed for that version. *Limit:* "Download update" opens the release page; it doesn't install by itself. Self-installing needs the one-click installer (v1.0). *Needs:* each version has to be published as a GitHub Release tagged like `v0.4.0`, or the check finds nothing.
 - **Verified inside Premiere** (by driving the live panel through Adobe's debug connection): panel loads with no errors, Settings opens in ~0.1 s, Back works, the update check runs, pasting a link wrapped in text finds the video, dragging both handles (including on top of each other and past the end), quick-length buttons, typed times and errors, and the missing-folder fallback. *Not verified:* the "Choose a folder…" window (it would block the automated test), and a real download through the new screen (it would import into an open project).
 
+## Entry 14 — v0.3.2: ready for someone else to install
+*2026-10-20*
+
+Goal: a friend on Windows can download Pluck from GitHub and test it without any developer setup.
+
+- **Cancel didn't really cancel.** *Problem:* found while testing on Mac. After Cancel on a clip, the helper tool that cuts clips (ffmpeg) kept downloading in the background and left a half-written file behind. On Windows, Cancel would likely have left the whole download running. *Decision:* Cancel now stops yt-dlp and everything it started. *Verified on Mac:* nothing left running and no leftover files. *Why:* a Cancel button that doesn't stop anything breaks people's trust in every other button.
+- **Video titles in other languages.** *Problem:* Windows hands text between programs in an old local format, so a title in Hindi, Japanese or with emoji could come back garbled. Pluck would then fail to find the file it just downloaded and show an error, even though the download worked. *Decision:* make yt-dlp always use UTF-8, the format that covers every language. *Not verified yet:* needs the Windows test.
+- **A lookup could spin forever.** *Decision:* give up after 45 s and say the site took too long. *Why:* an error you can act on beats a spinner that never ends.
+- **How people install it.** *Options:* (a) a `.zxp` file, Adobe's own format, which needs a separate installer app and a signing certificate; (b) a zip with a double-click install script. *Decision:* (b) for now. *Why:* nothing extra to download, and it's one step from what we already do. A proper signed installer is still the plan for v1.0. *Cost:* Mac and Windows warn about unsigned files the first time; the zip's "READ ME FIRST" explains how to get past that.
+- **One version number, in sync.** The version lives in two files. The release script refuses to build if they differ, because a mismatch would make Pluck tell people to update forever.
+
 ---
 
 ## Roadmap (reordered after Entry 7)
