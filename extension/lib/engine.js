@@ -69,6 +69,24 @@ function createEngine(extensionRoot) {
     return `${p(Math.floor(s / 3600))}-${p(Math.floor((s % 3600) / 60))}-${p(s % 60)}`;
   }
 
+  // Start yt-dlp. UTF-8 so titles in any language survive (Windows otherwise uses its old local text encoding).
+  // On Mac it gets its own process group, so stop() can end the ffmpeg it starts too.
+  function runYtdlp(args) {
+    const proc = spawn(YTDLP, args, {
+      env: Object.assign({}, process.env, { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }),
+      detached: process.platform !== "win32",
+    });
+    proc.stdout.setEncoding("utf8"); // decode across chunk edges, or a letter split in two turns into "�"
+    proc.stderr.setEncoding("utf8");
+    return proc;
+  }
+
+  // End yt-dlp and everything it started (ffmpeg keeps downloading otherwise).
+  function stop(proc) {
+    if (process.platform === "win32") return execFile("taskkill", ["/pid", String(proc.pid), "/T", "/F"], () => {});
+    try { process.kill(-proc.pid, "SIGTERM"); } catch (e) { proc.kill(); }
+  }
+
   function isHttpUrl(s) {
     try { const u = new URL(s); return u.protocol === "http:" || u.protocol === "https:"; } catch (e) { return false; }
   }
@@ -77,12 +95,16 @@ function createEngine(extensionRoot) {
   function info(url) {
     return new Promise((resolve, reject) => {
       if (!isHttpUrl(url)) return reject({ code: "badurl", message: "That doesn't look like a link." });
-      const proc = spawn(YTDLP, ["-J", "--no-playlist", "--no-warnings", "--", url]);
-      let out = "", err = "";
+      const proc = runYtdlp(["-J", "--no-playlist", "--no-warnings", "--", url]);
+      let out = "", err = "", timedOut = false;
+      // A stuck lookup would otherwise spin forever.
+      const timer = setTimeout(() => { timedOut = true; stop(proc); }, 45000);
       proc.stdout.on("data", c => { out += c; });
       proc.stderr.on("data", c => { err += c; });
-      proc.on("error", () => reject({ code: "tools", message: "Pluck's download tool couldn't start. Try reinstalling Pluck." }));
+      proc.on("error", () => { clearTimeout(timer); reject({ code: "tools", message: "Pluck's download tool couldn't start. Try reinstalling Pluck." }); });
       proc.on("close", code => {
+        clearTimeout(timer);
+        if (timedOut) return reject({ code: "network", message: "The site took too long to answer. Try again." });
         if (code !== 0) return reject(friendlyError(err));
         try {
           const j = JSON.parse(out);
@@ -116,7 +138,7 @@ function createEngine(extensionRoot) {
       ...formatFor(quality),
       "--", url,
     ];
-    const proc = spawn(YTDLP, args);
+    const proc = runYtdlp(args);
     job.proc = proc;
     let stderr = "", buf = "";
     // yt-dlp downloads video and audio separately; track which part we're on so the bar doesn't jump back.
@@ -156,7 +178,7 @@ function createEngine(extensionRoot) {
   function cancel(job) {
     if (!job || job.status === "done" || job.status === "error") return;
     job.status = "cancelled";
-    if (job.proc) job.proc.kill();
+    if (job.proc) stop(job.proc);
   }
 
   // After a cancel, delete the half-finished pieces yt-dlp leaves behind (only ones from this job's time window).

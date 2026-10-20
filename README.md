@@ -4,7 +4,7 @@ Paste a video link inside Premiere Pro. Pluck downloads it (or just the part you
 
 Works with YouTube, X/Twitter, Instagram, TikTok, Vimeo and [many more sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org).
 
-> **Status: v0.3, early.** Tested on macOS. Windows support is written but not yet tested. Search and GIFs are on the [roadmap](DESIGN_LOG.md).
+> **Status: v0.3, early.** Tested on macOS. Windows is being tested now. Search and GIFs are on the [roadmap](DESIGN_LOG.md).
 
 ## Features
 
@@ -19,9 +19,16 @@ Works with YouTube, X/Twitter, Instagram, TikTok, Vimeo and [many more sites](ht
 - Premiere Pro **2022 (22.0) or newer**
 - macOS or Windows (64-bit)
 
-## Install (developer build, for now)
+## Install
 
-A one-click installer is coming. Until then:
+1. Go to [Releases](https://github.com/dedkul/pluck/releases/latest) and download the zip for your computer: `Pluck-<version>-mac.zip` or `Pluck-<version>-win.zip`.
+2. Unzip it and close Premiere Pro.
+3. Double-click **Install Pluck.command** (Mac) or **Install Pluck.bat** (Windows).
+4. Open Premiere Pro, then **Window → Extensions → Pluck**.
+
+Pluck isn't signed yet, so your computer may warn you the first time. The zip's `READ ME FIRST.txt` explains how to allow it, and how to uninstall.
+
+## Install from source (developers)
 
 1. Download the tools into the extension:
    ```bash
@@ -48,7 +55,17 @@ extension/
   host/premiere.jsx                 imports files into a Premiere bin
   bin/mac, bin/win                  bundled tools (fetched by scripts/fetch-tools.sh, not in git)
   bin/mac/yt-dlp_macos/yt-dlp       yt-dlp on Mac (folder version: starts fast)
+installer/                          install scripts and READ ME FIRST, copied into each release zip
+scripts/fetch-tools.sh              downloads yt-dlp and FFmpeg (checksums verified)
+scripts/package.sh                  builds dist/Pluck-<version>-<mac|win>.zip for a release
 ```
+
+### Making a release
+
+1. Bump the version in `extension/CSXS/manifest.xml` and `extension/main.js` (`package.sh` refuses if they differ).
+2. `scripts/fetch-tools.sh mac && scripts/fetch-tools.sh win`
+3. `scripts/package.sh mac && scripts/package.sh win`
+4. Create a GitHub Release tagged `v<version>` (e.g. `v0.3.2`) and attach both zips. Pluck's update check reads this tag.
 
 Adobe is retiring CEP (off by default from December 2028). The plan is to move to a UXP Hybrid plugin before then. The [design log](DESIGN_LOG.md) has the full story.
 

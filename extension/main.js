@@ -1,7 +1,7 @@
 // Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.3.1",
+  version: "0.3.2",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
   releasesApi: "https://api.github.com/repos/dedkul/pluck/releases/latest",
