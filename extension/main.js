@@ -1,24 +1,26 @@
 // Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.3.0",
+  version: "0.3.1",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
+  releasesApi: "https://api.github.com/repos/dedkul/pluck/releases/latest",
 };
 
 /* ---------------- CEP bridges ---------------- */
-const cep = window.__adobe_cep__;
+// Not named "cep": Adobe already defines a global "cep", and reusing the name stops this whole file from running.
+const adobeHost = window.__adobe_cep__;
 
 // Same conversion Adobe's CSInterface.getSystemPath does: "file:///Users/..." -> "/Users/...".
 function extensionRoot() {
-  const p = decodeURI(cep.getSystemPath("extension"));
+  const p = decodeURI(adobeHost.getSystemPath("extension"));
   return /^file:\/\/\/[A-Za-z]:/.test(p) ? p.replace("file:///", "") : p.replace("file://", "");
 }
 
 // Call a function in host/premiere.jsx. Arguments go in as JSON literals, results come back as JSON.
 function host(fn, ...args) {
   return new Promise(resolve => {
-    cep.evalScript(`${fn}(${args.map(a => JSON.stringify(a)).join(",")})`, raw => {
+    adobeHost.evalScript(`${fn}(${args.map(a => JSON.stringify(a)).join(",")})`, raw => {
       try { resolve(JSON.parse(raw)); } catch (e) { resolve({ ok: false, message: "Premiere didn't respond. Try again." }); }
     });
   });
@@ -31,7 +33,7 @@ function openUrl(url) {
 // Match Premiere's panel color (it changes with the user's brightness setting).
 function matchPremiereTheme() {
   try {
-    const c = JSON.parse(cep.getHostEnvironment()).appSkinInfo.panelBackgroundColor.color;
+    const c = JSON.parse(adobeHost.getHostEnvironment()).appSkinInfo.panelBackgroundColor.color;
     const rgb = `rgb(${Math.round(c.red)}, ${Math.round(c.green)}, ${Math.round(c.blue)})`;
     document.documentElement.style.setProperty("--bg", rgb);
   } catch (e) {}
@@ -52,7 +54,9 @@ const engine = require(extensionRoot() + "/lib/engine.js").createEngine(extensio
 /* ---------------- Settings (remembered between sessions) ---------------- */
 function load(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } }
 function save(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
-const settings = { bin: load("pluck.bin", "Web Downloads"), quality: load("pluck.quality", "1080p") };
+// saveTo is "project" (a Web Downloads folder next to the project) or a folder path. It's whatever was used last.
+const settings = { bin: load("pluck.bin", "Web Downloads"), quality: load("pluck.quality", "1080p"),
+  saveTo: load("pluck.saveTo", "project"), customFolder: load("pluck.customFolder", "") };
 
 /* ---------------- Small helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -69,6 +73,14 @@ function parseT(str) {
   if (parts.length > 3 || parts.some(p => !/^\d+(\.\d+)?$/.test(p))) return null;
   return parts.reduce((total, p) => total * 60 + Number(p), 0);
 }
+// Pull the first link out of whatever was pasted ("check this https://… lol" works, so does "youtu.be/abc").
+function extractUrl(text) {
+  const t = String(text || "").trim();
+  const m = t.match(/https?:\/\/[^\s"'<>]+/i);
+  if (m) return m[0];
+  if (/^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+\/\S+$/i.test(t)) return "https://" + t;
+  return null;
+}
 function esc(s) { return String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 function dirName(p) { const parts = String(p).split(/[\\/]/); parts.pop(); return parts.join("/"); }
@@ -80,9 +92,12 @@ function toast(msg) {
 
 /* ---------------- Premiere ---------------- */
 // Downloads go in "<project folder>/Web Downloads". Unsaved projects fall back to ~/Movies/Pluck.
-async function downloadFolder() {
+async function projectFolder() {
   const r = await host("pluckProjectPath");
   return r.path ? dirName(r.path) + "/Web Downloads" : null;
+}
+async function downloadFolder() {
+  return settings.saveTo === "project" ? projectFolder() : settings.saveTo;
 }
 
 async function importIntoPremiere(file) {
@@ -111,31 +126,38 @@ function render() {
 }
 
 /* ---------------- Views ---------------- */
-function pasteRow(error) {
+// One field, one action at a time: "Paste link" while it's empty, a clear (×) button once it has a link.
+// Pasting or pressing Enter looks the video up straight away, so there's no separate "Get" step.
+function pasteRow(error, hint) {
   return `
-    <label class="label" for="url">Paste a video link</label>
+    <label class="label" for="url">Video link</label>
     <div class="field">
-      <input class="input ${error ? "bad" : ""}" id="url" placeholder="https://…" value="${esc(S.url)}" spellcheck="false">
-      <button class="btn" id="paste" title="Paste from clipboard">Paste</button>
-      <button class="btn primary" id="get">Get</button>
+      <div class="input-wrap">
+        <input class="input ${error ? "bad" : ""}" id="url" placeholder="Paste a YouTube, X or Instagram link" value="${esc(S.url)}" spellcheck="false">
+        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link">×</button>
+      </div>
+      <button class="btn primary ${S.url ? "hidden" : ""}" id="paste">Paste link</button>
     </div>
-    ${error ? `<div class="hint err">${esc(error)}</div>` : `<div class="hint">Copy a link in your browser, then click Paste.</div>`}`;
+    ${error ? `<div class="hint err">${esc(error)}</div>` : hint ? `<div class="hint">${hint}</div>` : ""}`;
 }
 function bindPaste() {
   const field = $("url");
-  const submit = () => lookup(field.value);
-  $("get").addEventListener("click", submit);
+  const sync = () => { $("clear").classList.toggle("hidden", !field.value); $("paste").classList.toggle("hidden", !!field.value); };
+  field.addEventListener("input", sync);
+  field.addEventListener("paste", () => setTimeout(() => lookup(field.value), 0));
+  field.addEventListener("keydown", e => { if (e.key === "Enter") lookup(field.value); });
+  // Premiere sometimes keeps ⌘V for itself, so this button reads the clipboard directly.
   $("paste").addEventListener("click", () => {
     const text = readClipboard();
-    if (!text) return toast("Your clipboard is empty");
-    field.value = text; submit();
+    if (!extractUrl(text)) return toast(text ? "There's no link on your clipboard. Copy one from your browser first." : "Your clipboard is empty. Copy a link from your browser first.");
+    lookup(text);
   });
-  field.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+  $("clear").addEventListener("click", () => { go("empty", { url: "", info: null }); $("url").focus(); });
 }
 
 function vEmpty(error) {
   main.innerHTML = `
-    ${pasteRow(error)}
+    ${pasteRow(error, "Copy a video's link in your browser, then click <b>Paste link</b>.")}
     <div class="chips">
       <span class="chip">YouTube</span><span class="chip">X / Twitter</span><span class="chip">Instagram</span>
       <span class="chip">TikTok</span><span class="chip">Vimeo</span><span class="chip">+ many more</span>
@@ -144,10 +166,11 @@ function vEmpty(error) {
 }
 
 async function lookup(raw) {
-  const url = String(raw || "").trim();
-  if (!url) return;
+  if (!String(raw || "").trim()) return;
+  const url = extractUrl(raw);
+  if (!url) { S.url = String(raw).trim(); return vEmpty("That doesn't look like a link. Copy the full address from your browser."); }
+  if (url === S.url && S.view === "ready") return;
   S.url = url;
-  if (!/^https?:\/\//i.test(url)) return vEmpty("That doesn't look like a link. Copy the full address from your browser.");
   go("loading");
   try {
     const info = await engine.info(url);
@@ -163,12 +186,12 @@ function vLoading() {
   main.innerHTML = `${pasteRow()}
     <div class="card vid" style="margin-top:14px">
       <div class="thumb skeleton"></div>
-      <div class="vid-meta"><div class="skeleton" style="height:11px;margin-bottom:6px"></div><div class="skeleton" style="height:11px;width:60%;margin-bottom:8px"></div><div class="sub">Looking up video…</div></div>
+      <div class="vid-meta"><div class="skeleton" style="height:11px;margin-bottom:6px"></div><div class="skeleton" style="height:11px;width:60%;margin-bottom:8px"></div><div class="sub">Finding the video…</div></div>
     </div>`;
   bindPaste();
 }
 
-function videoCard(withChange) {
+function videoCard() {
   const v = S.info;
   return `
     <div class="card vid">
@@ -177,7 +200,6 @@ function videoCard(withChange) {
         <div class="platform">${esc(v.platform)}</div>
         <div class="vid-title">${esc(v.title)}</div>
         <div class="vid-by">${esc(v.uploader)}</div>
-        ${withChange ? `<button class="vid-change" id="change">Use a different link</button>` : ""}
       </div>
     </div>`;
 }
@@ -193,8 +215,8 @@ function clipSection() {
     <div id="clipBox" class="${S.mode === "clip" ? "" : "hidden"}">
       <div class="range" id="range">
         <div class="track"></div><div class="fill" id="fill"></div>
-        <div class="handle" id="hA" tabindex="0" role="slider" aria-label="Clip start"></div>
-        <div class="handle" id="hB" tabindex="0" role="slider" aria-label="Clip end"></div>
+        <div class="handle" id="hA" tabindex="0" role="slider" aria-label="Clip start" title="Drag, or use ← → to nudge by a second"></div>
+        <div class="handle" id="hB" tabindex="0" role="slider" aria-label="Clip end" title="Drag, or use ← → to nudge by a second"></div>
       </div>
       <div class="scale"><span>0:00</span><span>${fmt(dur / 2)}</span><span>${fmt(dur)}</span></div>
       <div class="times">
@@ -245,20 +267,29 @@ function bindClip() {
     updateClip();
   }));
 
-  // Whichever handle is closer to the pointer moves. Pointer capture keeps the drag going past the edges.
+  // Whichever handle is closer to the mouse moves. Plain mouse events, not pointer events: Premiere doesn't pass
+  // pointer drags through to panels reliably. Move/up listen on the whole page so dragging past the ends works.
   const range = $("range"), dur = S.info.duration;
   const tFromX = x => { const r = range.getBoundingClientRect(); return Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * dur); };
   let dragging = null;
-  range.addEventListener("pointerdown", e => {
+  const onMove = e => { if (dragging) { e.preventDefault(); setT(dragging, tFromX(e.clientX)); } };
+  const onUp = () => {
+    if (dragging) $("h" + dragging).classList.remove("drag");
+    dragging = null;
+    document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp);
+  };
+  range.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // stops the drag from selecting text
     const t = tFromX(e.clientX);
-    dragging = e.target.id === "hA" ? "A" : e.target.id === "hB" ? "B" : Math.abs(t - S.start) <= Math.abs(t - S.end) ? "A" : "B";
-    range.setPointerCapture(e.pointerId);
+    // Pick by which side of the midpoint between the handles was clicked. On a long video a short clip puts the
+    // handles on top of each other; this way grabbing just left of them moves Start and just right moves End.
+    dragging = t < (S.start + S.end) / 2 ? "A" : t > (S.start + S.end) / 2 ? "B" : e.clientX < $("hB").getBoundingClientRect().left + 9 ? "A" : "B";
     $("h" + dragging).classList.add("drag");
+    $("h" + dragging).focus();
     setT(dragging, t);
+    document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
   });
-  range.addEventListener("pointermove", e => { if (dragging) setT(dragging, tFromX(e.clientX)); });
-  const end = () => { if (dragging) $("h" + dragging).classList.remove("drag"); dragging = null; };
-  range.addEventListener("pointerup", end); range.addEventListener("pointercancel", end);
   ["A", "B"].forEach(w => $("h" + w).addEventListener("keydown", e => {
     const step = e.shiftKey ? 10 : 1, cur = w === "A" ? S.start : S.end;
     if (e.key === "ArrowLeft" || e.key === "ArrowDown") { setT(w, cur - step); e.preventDefault(); }
@@ -271,7 +302,12 @@ function bindClip() {
       const t = parseT(field.value), err = $("timeErr");
       const problem = t === null ? "Use a time like 12:30 or 1:02:45." : t > dur ? `The video is only ${fmt(dur)} long.` : "";
       err.textContent = problem; err.classList.toggle("hidden", !problem); field.classList.toggle("bad", !!problem);
-      if (!problem) setT(which, t);
+      if (problem) return;
+      // Typing a start after the end (or an end before the start) moves the whole clip and keeps its length.
+      const len = S.end - S.start;
+      if (which === "A" && t >= S.end) { S.start = Math.min(t, dur - 1); S.end = Math.min(dur, S.start + len); updateClip(); }
+      else if (which === "B" && t <= S.start) { S.end = Math.max(t, 1); S.start = Math.max(0, S.end - len); updateClip(); }
+      else setT(which, t);
     };
     field.addEventListener("change", commit);
     field.addEventListener("keydown", e => { if (e.key === "Enter") { commit(); field.blur(); } });
@@ -289,7 +325,8 @@ function bindClip() {
 function vReady() {
   const items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
   main.innerHTML = `
-    ${videoCard(true)}
+    ${pasteRow()}
+    <div style="margin-top:12px">${videoCard()}</div>
     ${clipSection()}
     <div class="divider"></div>
     <div class="opts">
@@ -304,18 +341,68 @@ function vReady() {
         <div class="binname">${esc(settings.bin)}</div>
       </div>
     </div>
+    <div class="set">
+      <label class="label" for="saveTo">Save to</label>
+      ${saveToPicker()}
+      <div class="sub" id="saveToPath"></div>
+    </div>
     <div class="action">
       <button class="btn primary big full" id="download"></button>
-      <div class="sub">Saved next to your project and added to “${esc(settings.bin)}”</div>
     </div>`;
-  $("change").addEventListener("click", () => go("empty", { url: "", info: null }));
+  bindPaste();
+  bindSaveTo();
   $("quality").addEventListener("change", e => { S.quality = e.target.value; updateClip(); });
   $("download").addEventListener("click", startDownload);
   bindClip();
   updateClip();
 }
 
+/* ---------------- Save to (remembers the last folder used) ---------------- */
+function saveToPicker() {
+  const custom = settings.customFolder;
+  return `
+    <select class="input full" id="saveTo">
+      <option value="project" ${settings.saveTo === "project" ? "selected" : ""}>Project folder › Web Downloads</option>
+      ${custom ? `<option value="custom" ${settings.saveTo === custom ? "selected" : ""}>${esc(baseName(custom))}</option>` : ""}
+      <option value="choose">Choose a folder…</option>
+    </select>`;
+}
+
+async function showSavePath() {
+  const el = $("saveToPath"); if (!el) return;
+  if (settings.saveTo !== "project") { el.textContent = settings.saveTo; return; }
+  const folder = await projectFolder();
+  if ($("saveToPath")) $("saveToPath").textContent = folder || "Save your project first. Until then, files go to Movies/Pluck.";
+}
+
+function setSaveTo(value) {
+  settings.saveTo = value; save("pluck.saveTo", value);
+  if (value !== "project") { settings.customFolder = value; save("pluck.customFolder", value); }
+}
+
+function bindSaveTo() {
+  const sel = $("saveTo");
+  sel.addEventListener("change", () => {
+    if (sel.value === "project") setSaveTo("project");
+    else if (sel.value === "custom") setSaveTo(settings.customFolder);
+    else {
+      const start = settings.saveTo === "project" ? "" : settings.saveTo;
+      const r = window.cep.fs.showOpenDialogEx(false, true, "Choose where Pluck saves videos", start);
+      if (r && !r.err && r.data && r.data[0]) setSaveTo(r.data[0]);
+    }
+    sel.outerHTML = saveToPicker(); // rebuild so a newly picked folder shows by name
+    bindSaveTo();
+    showSavePath();
+  });
+  showSavePath();
+}
+
 async function startDownload() {
+  // A remembered folder can disappear (an unplugged drive). Fall back to the project folder and say so.
+  if (settings.saveTo !== "project" && !require("fs").existsSync(settings.saveTo)) {
+    setSaveTo("project"); render();
+    return toast("That folder isn't available anymore, so Pluck switched back to your project folder.");
+  }
   const outDir = await downloadFolder();
   const clip = S.mode === "clip" ? { start: S.start, end: S.end } : null;
   const job = engine.download({ url: S.info.url, quality: S.quality, outDir, clip });
@@ -326,7 +413,7 @@ async function startDownload() {
 
 function vDownloading() {
   main.innerHTML = `
-    ${videoCard(false)}
+    ${videoCard()}
     <div class="bar ${S.mode === "clip" ? "hidden" : ""}"><div class="bar-fill" id="barFill"></div></div>
     <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
     <div class="steps">
@@ -378,7 +465,7 @@ function vDone() {
       <div class="result-title">Added to your project</div>
       <div class="result-text">Find it in the “${esc(settings.bin)}” bin.</div>
       <div class="file">${esc(baseName(S.file))}</div>
-      <div class="result-actions"><button class="btn primary" id="again">Pluck another</button></div>
+      <div class="result-actions"><button class="btn primary" id="again">Download another video</button></div>
     </div>`;
   $("again").addEventListener("click", () => go("empty", { url: "", info: null }));
 }
@@ -394,22 +481,18 @@ function vError() {
       <div class="result-icon">!</div>
       <div class="result-title">${esc(title)}</div>
       <div class="result-text">${esc(e.message || "Something went wrong.")}</div>
-      <div class="result-actions">
-        ${S.url ? `<button class="btn" id="retry">Try again</button>` : ""}
-        <button class="btn primary" id="reset">New link</button>
-      </div>
+      ${S.url ? `<div class="result-actions"><button class="btn primary" id="retry">Try again</button></div>` : ""}
     </div>`;
   bindPaste();
-  if ($("retry")) $("retry").addEventListener("click", () => (S.info ? go("ready") : lookup(S.url)));
-  $("reset").addEventListener("click", () => go("empty", { url: "", info: null }));
+  if ($("retry")) $("retry").addEventListener("click", () => { if (S.info) return go("ready"); const u = S.url; S.url = ""; lookup(u); });
 }
 
 /* ---------------- Settings sheet ---------------- */
+// Opens instantly; the tool check fills in when it's ready (it's usually done already, see the bottom of this file).
 async function openSettings() {
   $("settings").classList.remove("hidden");
-  const folder = await downloadFolder();
-  $("setFolder").textContent = folder || "~/Movies/Pluck (save your project to keep media next to it)";
-  const st = engine.status();
+  $("settings").scrollTop = 0;
+  const st = await engine.status();
   $("toolsLed").className = "led " + (st.ytdlp && st.ffmpeg ? "on" : "off");
   $("toolsName").textContent = st.ytdlp ? `yt-dlp ${st.ytdlp}` : "yt-dlp is missing";
   $("toolsSub").textContent = !st.ffmpeg ? "ffmpeg is missing" : st.bundled ? "Built into Pluck" : "Using tools installed on this computer";
@@ -430,13 +513,51 @@ function initSettings() {
   $("aboutVersion").textContent = "v" + CONFIG.version;
   $("makerHandle").textContent = "@" + CONFIG.xHandle;
   $("followBtn").addEventListener("click", () => openUrl(`https://x.com/intent/follow?screen_name=${CONFIG.xHandle}`));
-  const link = (id, url) => $(id).addEventListener("click", e => { e.preventDefault(); openUrl(url); });
-  link("bugLink", `${CONFIG.repo}/issues/new?labels=bug`);
-  link("featureLink", `${CONFIG.repo}/issues/new?labels=enhancement`);
-  link("codeLink", CONFIG.repo);
+  $("updateBtn").addEventListener("click", () => (update.latest ? openUrl(update.url) : checkForUpdate(true)));
+  $("bannerGet").addEventListener("click", () => openUrl(update.url));
+  $("bannerClose").addEventListener("click", () => { save("pluck.dismissed", update.latest); $("banner").classList.add("hidden"); });
+}
+
+/* ---------------- Updates ---------------- */
+// Pluck asks GitHub for the newest release: quietly once a day, or when "Check for updates" is clicked.
+// A newer version shows a banner above the panel and a "Download update" button in Settings.
+const update = { latest: null, url: CONFIG.repo + "/releases/latest" };
+
+function isNewer(a, b) { // "0.4.0" vs "0.3.1"
+  const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+
+function showUpdateState(text, button) {
+  $("updateStatus").textContent = text;
+  $("updateBtn").textContent = button;
+}
+
+async function checkForUpdate(manual) {
+  if (manual) { showUpdateState("Checking…", "Check for updates"); $("updateBtn").disabled = true; }
+  try {
+    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: "application/vnd.github+json" } });
+    const rel = res.status === 404 ? null : await res.json(); // 404 = nothing released yet
+    save("pluck.lastCheck", String(Date.now()));
+    const v = rel && rel.tag_name ? rel.tag_name.replace(/^v/, "") : null;
+    if (v && isNewer(v, CONFIG.version)) {
+      update.latest = v; update.url = rel.html_url || update.url;
+      showUpdateState(`Version ${v} is available.`, "Download update");
+      $("bannerText").textContent = `Pluck ${v} is available.`;
+      if (manual || load("pluck.dismissed", "") !== v) $("banner").classList.remove("hidden");
+    } else if (manual) showUpdateState("You're on the latest version.", "Check for updates");
+  } catch (e) {
+    if (manual) showUpdateState("Couldn't check. Are you online?", "Try again");
+  }
+  $("updateBtn").disabled = false;
 }
 
 /* ---------------- Start ---------------- */
 matchPremiereTheme();
 initSettings();
 render();
+setTimeout(() => {
+  engine.status(); // warm up the slow tool check so Settings has the answer ready
+  if (Date.now() - Number(load("pluck.lastCheck", "0")) > 24 * 3600 * 1000) checkForUpdate(false);
+}, 1500);

@@ -5,3 +5,4 @@ engine/bin/
 *.ytdl
 CLAUDE.md
 extension/bin/
+extension/.debug

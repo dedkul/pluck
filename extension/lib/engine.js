@@ -5,7 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { spawn, execFileSync } = require("child_process");
+const { spawn, execFile } = require("child_process");
 
 function createEngine(extensionRoot) {
   const exe = name => (process.platform === "win32" ? name + ".exe" : name);
@@ -23,13 +23,20 @@ function createEngine(extensionRoot) {
   const YTDLP = findTool("yt-dlp");
   const FFMPEG = findTool("ffmpeg");
 
+  // Asking yt-dlp its version takes ~3 s (the bundled build unpacks itself first), so it runs in the
+  // background and the answer is remembered. Waiting for it synchronously froze the whole panel.
+  let statusPromise = null;
   function status() {
-    let version = null;
-    try { version = execFileSync(YTDLP, ["--version"], { encoding: "utf8", timeout: 20000 }).trim(); } catch (e) {}
-    return {
-      ytdlp: version, ffmpeg: !!FFMPEG,
-      bundled: !!YTDLP && YTDLP.indexOf(platformDir) === 0 && !!FFMPEG && FFMPEG.indexOf(platformDir) === 0,
-    };
+    if (statusPromise) return statusPromise;
+    statusPromise = new Promise(resolve => {
+      const done = version => resolve({
+        ytdlp: version, ffmpeg: !!FFMPEG,
+        bundled: !!YTDLP && YTDLP.indexOf(platformDir) === 0 && !!FFMPEG && FFMPEG.indexOf(platformDir) === 0,
+      });
+      if (!YTDLP) return done(null);
+      execFile(YTDLP, ["--version"], { encoding: "utf8", timeout: 20000 }, (err, out) => done(err ? null : out.trim()));
+    });
+    return statusPromise;
   }
 
   // Turn yt-dlp's raw error output into something a person can act on.
@@ -93,7 +100,8 @@ function createEngine(extensionRoot) {
   function download({ url, outDir, quality, clip }) {
     const job = { status: "downloading", percent: 0, speed: "", file: null, error: null, proc: null };
     outDir = outDir || path.join(os.homedir(), "Movies", "Pluck");
-    fs.mkdirSync(outDir, { recursive: true });
+    try { fs.mkdirSync(outDir, { recursive: true }); }
+    catch (e) { return Object.assign(job, { status: "error", error: { code: "folder", message: "Pluck can't save to " + outDir + ". Pick another folder under “Save to”." } }); }
 
     const args = [
       // --print turns on quiet mode, so --progress is needed to keep progress lines coming.
