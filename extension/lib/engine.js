@@ -12,8 +12,9 @@ function createEngine(extensionRoot) {
   const platformDir = path.join(extensionRoot, "bin", process.platform === "win32" ? "win" : "mac");
 
   // Bundled tools first. Fall back to a system install only for development.
+  // On Mac, yt-dlp is the folder build, in its own subfolder next to its support files.
   function findTool(name) {
-    const dirs = [platformDir, "/opt/homebrew/bin", "/usr/local/bin"].concat((process.env.PATH || "").split(path.delimiter));
+    const dirs = [path.join(platformDir, "yt-dlp_macos"), platformDir, "/opt/homebrew/bin", "/usr/local/bin"].concat((process.env.PATH || "").split(path.delimiter));
     for (const dir of dirs) {
       const p = dir && path.join(dir, exe(name));
       if (p && fs.existsSync(p)) return p;
@@ -23,7 +24,7 @@ function createEngine(extensionRoot) {
   const YTDLP = findTool("yt-dlp");
   const FFMPEG = findTool("ffmpeg");
 
-  // Asking yt-dlp its version takes ~3 s (the bundled build unpacks itself first), so it runs in the
+  // Asking yt-dlp its version can take a few seconds (the old single-file build took ~3 s), so it runs in the
   // background and the answer is remembered. Waiting for it synchronously froze the whole panel.
   let statusPromise = null;
   function status() {

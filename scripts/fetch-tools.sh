@@ -27,7 +27,12 @@ fetch_ytdlp() { # $1 = release asset name, $2 = file name to save as
 }
 
 if [[ "$PLATFORM" == "mac" ]]; then
-  fetch_ytdlp yt-dlp_macos yt-dlp
+  # The folder build (a zip) starts in ~0.2 s; the single-file build unpacks itself on every run (~3 s).
+  fetch_ytdlp yt-dlp_macos.zip yt-dlp_macos.zip
+  rm -rf "$OUT/yt-dlp_macos" "$OUT/yt-dlp"
+  unzip -qo "$OUT/yt-dlp_macos.zip" -d "$OUT/yt-dlp_macos"
+  mv "$OUT/yt-dlp_macos/yt-dlp_macos" "$OUT/yt-dlp_macos/yt-dlp"
+  rm "$OUT/yt-dlp_macos.zip"
   # evermeet.cx: the macOS static build linked from ffmpeg.org (Intel; runs via Rosetta on Apple Silicon).
   for tool in ffmpeg ffprobe; do
     echo "→ $tool (evermeet.cx)"

@@ -47,6 +47,7 @@ extension/
   lib/engine.js                     runs yt-dlp and FFmpeg
   host/premiere.jsx                 imports files into a Premiere bin
   bin/mac, bin/win                  bundled tools (fetched by scripts/fetch-tools.sh, not in git)
+  bin/mac/yt-dlp_macos/yt-dlp       yt-dlp on Mac (folder version: starts fast)
 ```
 
 Adobe is retiring CEP (off by default from December 2028). The plan is to move to a UXP Hybrid plugin before then. The [design log](DESIGN_LOG.md) has the full story.
