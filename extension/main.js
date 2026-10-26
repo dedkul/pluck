@@ -1,7 +1,7 @@
 // Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.3.2",
+  version: "0.3.3",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
   releasesApi: "https://api.github.com/repos/dedkul/pluck/releases/latest",
@@ -25,8 +25,9 @@ function host(fn, ...args) {
   return new Promise(resolve => {
     adobeHost.evalScript(`${fn}(${args.map(asciiJSON).join(",")})`, raw => {
       try { resolve(JSON.parse(raw)); } catch (e) {
+        // Show Premiere's actual reply (often "EvalScript error.") so a screenshot is enough to diagnose it.
         console.log(`Pluck: ${fn} returned`, raw);
-        resolve({ ok: false, message: "Premiere didn't respond. Try again." });
+        resolve({ ok: false, message: `Premiere didn't respond${raw ? ` (it said: ${String(raw).slice(0, 80)})` : ""}.` });
       }
     });
   });

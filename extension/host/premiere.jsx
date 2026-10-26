@@ -1,10 +1,23 @@
 // Runs inside Premiere (ExtendScript). The panel calls these through evalScript and gets a JSON string back.
 
-// Answers go back as pure ASCII (non-ASCII as \uXXXX), because evalScript mangles other characters on macOS.
+// Answers are flat objects of strings and booleans. They're written by hand because older Premiere versions'
+// ExtendScript has no JSON object, and as pure ASCII (\uXXXX) so no character can get mangled on the way back.
+function pluckString(s) {
+  var out = '"';
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i), code = s.charCodeAt(i);
+    if (ch === '"' || ch === "\\") out += "\\" + ch;
+    else if (code < 32 || code > 126) out += "\\u" + ("000" + code.toString(16)).slice(-4);
+    else out += ch;
+  }
+  return out + '"';
+}
 function pluckJSON(value) {
-  return JSON.stringify(value).replace(/[\u007f-￿]/g, function (c) {
-    return "\\u" + ("000" + c.charCodeAt(0).toString(16)).slice(-4);
-  });
+  var parts = [];
+  for (var key in value) {
+    if (value.hasOwnProperty(key)) parts.push(pluckString(key) + ":" + (typeof value[key] === "string" ? pluckString(value[key]) : String(value[key])));
+  }
+  return "{" + parts.join(",") + "}";
 }
 
 function pluckProjectPath() {

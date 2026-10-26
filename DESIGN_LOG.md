@@ -180,6 +180,18 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **How people install it.** *Options:* (a) a `.zxp` file, Adobe's own format, which needs a separate installer app and a signing certificate; (b) a zip with a double-click install script. *Decision:* (b) for now. *Why:* nothing extra to download, and it's one step from what we already do. A proper signed installer is still the plan for v1.0. *Cost:* Mac and Windows warn about unsigned files the first time; the zip's "READ ME FIRST" explains how to get past that.
 - **One version number, in sync.** The version lives in two files. The release script refuses to build if they differ, because a mismatch would make Pluck tell people to update forever.
 
+## Entry 15 — v0.3.3: "Premiere didn't respond" on a friend's Mac
+*2026-10-26*
+
+- **Problem:** On a friend's MacBook, a YouTube download finished but the import failed with "Couldn't get this video. Premiere didn't respond." The same build worked on a Windows friend's machine.
+- **What that message means:** the panel asked Premiere's scripting side to import the file and got back something it couldn't read.
+- **First guess, tested and mostly wrong:** the title had a curly apostrophe ("INDIA’S…"), and Adobe's bridge on macOS can garble such characters. I made all text cross the bridge as plain codes (`’` → `’`). Then I tested it live in Premiere 2026 on our Mac, and the **old** way worked fine there too. So the fix is a safe precaution, not the proven cause.
+- **Second explanation, which fits every symptom:** Pluck's Premiere script used a built-in called `JSON` to write its replies. If a Premiere's script engine lacks it (likely older versions), every reply breaks. The folder lookup fails silently, so the download still runs (to `~/Movies/Pluck`), then the import reply breaks, which is exactly what the friend saw.
+- **Decision:** the script now writes its replies by hand and needs no built-ins. Verified live by hiding `JSON` inside Premiere: the folder lookup and the import both still worked.
+- **Better error:** if it ever happens again, the message shows what Premiere actually said and where the downloaded file is, so it can be dragged in by hand and a screenshot is enough to diagnose it.
+- **Not verified:** on the friend's Mac itself. We still need their Premiere version to confirm which cause it was.
+- **Lesson:** I had a convincing story (the apostrophe) and almost shipped it as "the fix." Reproducing it first showed the story didn't hold up. Test the theory before you believe it.
+
 ---
 
 ## Roadmap (reordered after Entry 7)
