@@ -1,7 +1,7 @@
 // Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.3.3",
+  version: "0.3.4",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
   releasesApi: "https://api.github.com/repos/dedkul/pluck/releases/latest",
@@ -521,15 +521,17 @@ function initSettings() {
   $("aboutVersion").textContent = "v" + CONFIG.version;
   $("makerHandle").textContent = "@" + CONFIG.xHandle;
   $("followBtn").addEventListener("click", () => openUrl(`https://x.com/intent/follow?screen_name=${CONFIG.xHandle}`));
-  $("updateBtn").addEventListener("click", () => (update.latest ? openUrl(update.url) : checkForUpdate(true)));
-  $("bannerGet").addEventListener("click", () => openUrl(update.url));
+  $("updateBtn").addEventListener("click", () => (update.latest ? installUpdate() : checkForUpdate(true)));
+  $("bannerGet").addEventListener("click", installUpdate);
   $("bannerClose").addEventListener("click", () => { save("pluck.dismissed", update.latest); $("banner").classList.add("hidden"); });
 }
 
 /* ---------------- Updates ---------------- */
 // Pluck asks GitHub for the newest release: quietly once a day, or when "Check for updates" is clicked.
-// A newer version shows a banner above the panel and a "Download update" button in Settings.
-const update = { latest: null, url: CONFIG.repo + "/releases/latest" };
+// A newer version shows a banner above the panel and an "Install update" button in Settings.
+// state: null, "installing", "failed" (the buttons then open the download page) or "done".
+const update = { latest: null, release: null, state: null, url: CONFIG.repo + "/releases/latest" };
+const updater = require(extensionRoot() + "/lib/updater.js");
 
 function isNewer(a, b) { // "0.4.0" vs "0.3.1"
   const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
@@ -550,8 +552,9 @@ async function checkForUpdate(manual) {
     save("pluck.lastCheck", String(Date.now()));
     const v = rel && rel.tag_name ? rel.tag_name.replace(/^v/, "") : null;
     if (v && isNewer(v, CONFIG.version)) {
-      update.latest = v; update.url = rel.html_url || update.url;
-      showUpdateState(`Version ${v} is available.`, "Download update");
+      if (update.state) return; // an install already started; keep its messages
+      update.latest = v; update.release = rel; update.url = rel.html_url || update.url;
+      showUpdateState(`Version ${v} is available.`, "Install update");
       $("bannerText").textContent = `Pluck ${v} is available.`;
       if (manual || load("pluck.dismissed", "") !== v) $("banner").classList.remove("hidden");
     } else if (manual) showUpdateState("You're on the latest version.", "Check for updates");
@@ -559,6 +562,29 @@ async function checkForUpdate(manual) {
     if (manual) showUpdateState("Couldn't check. Are you online?", "Try again");
   }
   $("updateBtn").disabled = false;
+}
+
+// Downloads the new version and swaps it in. The banner and Settings both show how it's going.
+async function installUpdate() {
+  if (update.state === "failed" || updater.isDevInstall(extensionRoot())) return openUrl(update.url);
+  if (update.state) return;
+  update.state = "installing";
+  const say = text => { $("bannerText").textContent = text; $("updateStatus").textContent = text; };
+  $("banner").classList.remove("hidden");
+  $("bannerGet").disabled = $("updateBtn").disabled = true;
+  try {
+    const v = await updater.installUpdate(update.release, extensionRoot(), say);
+    update.state = "done";
+    say(`Pluck ${v} is installed. Close and reopen the Pluck panel (or restart Premiere) to use it.`);
+    $("bannerGet").classList.add("hidden");
+    $("updateBtn").textContent = "Installed";
+  } catch (e) {
+    console.log("Pluck: update failed", e, e.cause);
+    update.state = "failed";
+    say(e.message);
+    $("bannerGet").textContent = $("updateBtn").textContent = "Download page";
+    $("bannerGet").disabled = $("updateBtn").disabled = false;
+  }
 }
 
 /* ---------------- Start ---------------- */
