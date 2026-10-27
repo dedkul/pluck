@@ -1,7 +1,7 @@
 // Pluck panel (CEP). Downloads with the bundled tools through Node, imports through Premiere's ExtendScript.
 
 const CONFIG = {
-  version: "0.3.2",
+  version: "0.3.3",
   xHandle: "feat_ashish",
   repo: "https://github.com/dedkul/pluck",
   releasesApi: "https://api.github.com/repos/dedkul/pluck/releases/latest",
@@ -17,11 +17,18 @@ function extensionRoot() {
   return /^file:\/\/\/[A-Za-z]:/.test(p) ? p.replace("file:///", "") : p.replace("file://", "");
 }
 
+// Non-ASCII characters (like the ’ in a video title) get mangled by evalScript on macOS, so they travel as \uXXXX codes.
+const asciiJSON = v => JSON.stringify(v).replace(/[\u007f-￿]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+
 // Call a function in host/premiere.jsx. Arguments go in as JSON literals, results come back as JSON.
 function host(fn, ...args) {
   return new Promise(resolve => {
-    adobeHost.evalScript(`${fn}(${args.map(a => JSON.stringify(a)).join(",")})`, raw => {
-      try { resolve(JSON.parse(raw)); } catch (e) { resolve({ ok: false, message: "Premiere didn't respond. Try again." }); }
+    adobeHost.evalScript(`${fn}(${args.map(asciiJSON).join(",")})`, raw => {
+      try { resolve(JSON.parse(raw)); } catch (e) {
+        // Show Premiere's actual reply (often "EvalScript error.") so a screenshot is enough to diagnose it.
+        console.log(`Pluck: ${fn} returned`, raw);
+        resolve({ ok: false, message: `Premiere didn't respond${raw ? ` (it said: ${String(raw).slice(0, 80)})` : ""}.` });
+      }
     });
   });
 }
@@ -102,7 +109,8 @@ async function downloadFolder() {
 
 async function importIntoPremiere(file) {
   const r = await host("pluckImport", file, settings.bin);
-  if (!r.ok) throw { message: r.message };
+  // The download itself worked, so always say where the file is; it can be dragged in by hand.
+  if (!r.ok) throw { message: /saved here/.test(r.message) ? r.message : `${r.message} The file is saved here: ${file}` };
 }
 
 /* ---------------- State ---------------- */
