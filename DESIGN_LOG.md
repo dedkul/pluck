@@ -192,6 +192,17 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified:** on the friend's Mac itself. We still need their Premiere version to confirm which cause it was.
 - **Lesson:** I had a convincing story (the apostrophe) and almost shipped it as "the fix." Reproducing it first showed the story didn't hold up. Test the theory before you believe it.
 
+## Entry 16 — One-click updates
+*2026-10-27*
+
+- **Problem:** every new version meant going to GitHub, downloading a zip, unzipping it and running the installer again. A friend on Mac has had to do that twice in a week. Most people would just stay on the old version, bugs and all.
+- **Decision:** the "Update now" button in the banner (and "Install update" in Settings) now does the whole thing inside Pluck. It picks the Mac or Windows zip from the release, downloads it with a progress percentage, unpacks it, checks it really is the promised version, and swaps it in. Then it says: close and reopen the Pluck panel (or restart Premiere).
+- **Why it can't leave Pluck broken:** the old version isn't touched until the new one is downloaded, unpacked and checked. The swap itself is two quick renames, and if the second fails the first is undone. Every failure (no internet, the release has no zip for your computer, no permission to change the folder, a download that doesn't match) leaves the old version working and turns the button into "Download page", the old way.
+- **Developer copies are left alone:** on our own Mac, Pluck is a link to the code folder. Updating that would overwrite the code, so there the button still just opens the release page.
+- **Verified on Mac:** a real download of the v0.3.2 release from GitHub into a test install (about 100 MB, 50 s): version swapped, bundled ffmpeg still runs, no leftovers. Each failure case above was tested and left the old version in place.
+- **Not verified yet:** clicking the button inside Premiere itself, and anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
+- **Catch:** this only helps from the version that includes it. Anyone on v0.3.2 or older installs v0.3.3 by hand one last time.
+
 ---
 
 ## Roadmap (reordered after Entry 7)
