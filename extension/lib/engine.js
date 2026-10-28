@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawn, execFile } = require("child_process");
+const https = require("https");
 
 function createEngine(extensionRoot) {
   const exe = name => (process.platform === "win32" ? name + ".exe" : name);
@@ -92,10 +93,14 @@ function createEngine(extensionRoot) {
   }
 
   // Video details (title, length, thumbnail) without downloading.
+  // A playlist link comes back as { playlist: true, title, entries } instead, with each video's title and length.
+  // --no-playlist still wins for a video opened from inside a playlist (watch?v=…&list=…): that stays one video.
   function info(url) {
     return new Promise((resolve, reject) => {
       if (!isHttpUrl(url)) return reject({ code: "badurl", message: "That doesn't look like a link." });
-      const proc = runYtdlp(["-J", "--no-playlist", "--no-warnings", "--", url]);
+      const folderId = driveFolderId(url);
+      if (folderId) return driveFolder(folderId).then(resolve, reject);
+      const proc = runYtdlp(["-J", "--no-playlist", "--flat-playlist", "--no-warnings", "--", url]);
       let out = "", err = "", timedOut = false;
       // A stuck lookup would otherwise spin forever.
       const timer = setTimeout(() => { timedOut = true; stop(proc); }, 45000);
@@ -108,6 +113,7 @@ function createEngine(extensionRoot) {
         if (code !== 0) return reject(friendlyError(err));
         try {
           const j = JSON.parse(out);
+          if (j._type === "playlist") return playlistInfo(j, url).then(resolve, reject);
           resolve({
             title: j.title, uploader: j.uploader || j.channel || j.uploader_id || "",
             duration: j.duration || 0, thumbnail: j.thumbnail || null,
@@ -115,6 +121,68 @@ function createEngine(extensionRoot) {
           });
         } catch (e) { reject({ code: "unknown", message: "Couldn't read the video details." }); }
       });
+    });
+  }
+
+  // Keep only entries that are single videos. A channel link lists its tabs ("Videos", "Shorts") as entries,
+  // and each of those is a whole playlist of its own, so they're left out.
+  function playlistInfo(j, url) {
+    const entries = (j.entries || []).filter(e => e && (e.url || e.webpage_url) && e._type !== "playlist" && !/Tab|Playlist/.test(e.ie_key || ""))
+      .map(e => ({ title: e.title || "Untitled video", url: e.url || e.webpage_url, duration: e.duration || 0, size: 0 }));
+    if (!entries.length) return Promise.reject({ code: "novideos", message: (j.entries || []).length
+      ? "This link is a channel or a list of playlists. Open one playlist and copy its link."
+      : "There are no videos in this playlist." });
+    const thumbs = j.thumbnails || [];
+    return Promise.resolve({
+      playlist: true, title: j.title || "Playlist", uploader: j.uploader || j.channel || "",
+      platform: (j.extractor_key || j.extractor || "").replace(/Tab$/, ""), url: j.webpage_url || url, entries,
+      thumbnail: thumbs.length ? thumbs[thumbs.length - 1].url : null,
+    });
+  }
+
+  // Google Drive folders. yt-dlp's own folder reader is broken (github.com/yt-dlp/yt-dlp/issues/10484), so Pluck
+  // reads the folder's web page instead: it carries the file list as data. Each video is then downloaded by yt-dlp
+  // as a normal Drive file. Google's page lists only the first 50 files, and files in subfolders aren't included.
+  function driveFolderId(url) {
+    const m = url.match(/^https?:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([\w-]+)/);
+    return m ? m[1] : null;
+  }
+
+  function fetchText(url, redirects) {
+    return new Promise((resolve, reject) => {
+      const req = https.get(url, { headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "en" } }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+          res.resume();
+          return fetchText(new URL(res.headers.location, url).href, redirects - 1).then(resolve, reject);
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", c => { body += c; });
+        res.on("end", () => resolve(body));
+      });
+      req.setTimeout(30000, () => req.destroy(new Error("timeout")));
+      req.on("error", reject);
+    });
+  }
+
+  function driveFolder(id) {
+    const network = { code: "network", message: "Couldn't reach Google Drive. Check your internet and try again." };
+    return fetchText("https://drive.google.com/drive/folders/" + id, 5).catch(() => { throw network; }).then(html => {
+      const m = html.match(/window\['_DRIVE_ivd'\] = '([^']*)'/);
+      if (!m) throw { code: "privatefolder", message: "This folder isn't shared publicly. In Google Drive, set it to “Anyone with the link” and try again." };
+      let items;
+      try { items = JSON.parse(m[1].replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\\//g, "/"))[0] || []; }
+      catch (e) { throw { code: "unknown", message: "Couldn't read this Google Drive folder." }; }
+      // Each item is [id, [parent], name, type, …, size at 13].
+      const entries = items.filter(it => /^video\//.test(it[3]))
+        .map(it => ({ title: it[2], url: "https://drive.google.com/file/d/" + it[0] + "/view", duration: 0, size: Number(it[13]) || 0 }));
+      if (!entries.length) throw { code: "novideos", message: items.some(it => /folder$/.test(it[3]))
+        ? "There are no videos directly in this folder. Open a subfolder and copy its link."
+        : "There are no videos in this folder." };
+      const t = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || "";
+      const title = t.replace(/\s+[–-]\s+Google Drive$/, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+      return { playlist: true, title: title || "Drive folder", uploader: "", platform: "Google Drive", entries, thumbnail: null,
+        url: "https://drive.google.com/drive/folders/" + id, capped: items.length >= 50 };
     });
   }
 
@@ -135,7 +203,8 @@ function createEngine(extensionRoot) {
       // Clips: fetch only that stretch, and re-cut the edges so the clip starts exactly where asked.
       ...(clip ? ["--download-sections", `*${clip.start}-${clip.end}`, "--force-keyframes-at-cuts"] : []),
       ...(FFMPEG ? ["--ffmpeg-location", path.dirname(FFMPEG)] : []),
-      ...formatFor(quality),
+      // Google Drive's other formats are small previews (360p), so take the file exactly as it was uploaded.
+      ...(/^https?:\/\/drive\.google\.com\/file\//.test(url) && quality !== "audio" ? ["-f", "source/b"] : formatFor(quality)),
       "--", url,
     ];
     const proc = runYtdlp(args);

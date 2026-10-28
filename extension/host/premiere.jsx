@@ -34,11 +34,17 @@ function pluckFindBin(parent, name) {
 }
 
 // Import one file into the named bin at the top of the project, creating the bin if needed.
-function pluckImport(filePath, binName) {
+// subBinName (playlists and folders) puts it one level deeper, in a bin of that name inside the first one.
+function pluckImport(filePath, binName, subBinName) {
   try {
     if (!app.project) return pluckJSON({ ok: false, message: "Open a Premiere project first, then try again." });
     var root = app.project.rootItem;
     var bin = pluckFindBin(root, binName) || root.createBin(binName) || root;
+    if (subBinName) {
+      // Looked up again after creating it: older Premiere versions' createBin doesn't return the new bin.
+      if (!pluckFindBin(bin, subBinName)) bin.createBin(subBinName);
+      bin = pluckFindBin(bin, subBinName) || bin;
+    }
     var ok = app.project.importFiles([filePath], true, bin, false);
     return pluckJSON(ok ? { ok: true } : { ok: false, message: "Premiere couldn't import the file. It's saved here: " + filePath });
   } catch (e) {

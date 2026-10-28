@@ -91,6 +91,9 @@ function extractUrl(text) {
 function esc(s) { return String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 function dirName(p) { const parts = String(p).split(/[\\/]/); parts.pop(); return parts.join("/"); }
+// A playlist name made safe to use as a folder name on Mac and Windows.
+function folderName(s) { return String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/[. ]+$/, "").trim().slice(0, 80) || "Playlist"; }
+function mb(bytes) { return bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + " GB" : Math.max(0.1, bytes / 1e6).toFixed(1) + " MB"; }
 let toastTimer;
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("on");
@@ -107,8 +110,8 @@ async function downloadFolder() {
   return settings.saveTo === "project" ? projectFolder() : settings.saveTo;
 }
 
-async function importIntoPremiere(file) {
-  const r = await host("pluckImport", file, settings.bin);
+async function importIntoPremiere(file, subBin) {
+  const r = await host("pluckImport", file, settings.bin, subBin || "");
   // The download itself worked, so always say where the file is; it can be dragged in by hand.
   if (!r.ok) throw { message: /saved here/.test(r.message) ? r.message : `${r.message} The file is saved here: ${file}` };
 }
@@ -130,7 +133,8 @@ function go(view, patch) {
 }
 
 function render() {
-  ({ empty: vEmpty, loading: vLoading, ready: vReady, downloading: vDownloading, done: vDone, error: vError })[S.view]();
+  ({ empty: vEmpty, loading: vLoading, ready: vReady, downloading: vDownloading, done: vDone, error: vError,
+    batch: vBatch, batchRun: vBatchRun, batchDone: vBatchDone })[S.view]();
 }
 
 /* ---------------- Views ---------------- */
@@ -177,12 +181,13 @@ async function lookup(raw) {
   if (!String(raw || "").trim()) return;
   const url = extractUrl(raw);
   if (!url) { S.url = String(raw).trim(); return vEmpty("That doesn't look like a link. Copy the full address from your browser."); }
-  if (url === S.url && S.view === "ready") return;
+  if (url === S.url && (S.view === "ready" || S.view === "batch")) return;
   S.url = url;
   go("loading");
   try {
     const info = await engine.info(url);
     if (S.view !== "loading" || S.url !== url) return;
+    if (info.playlist) return go("batch", { info: null, batch: newBatch(info) });
     go("ready", Object.assign({ info }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
@@ -378,9 +383,10 @@ function saveToPicker() {
 
 async function showSavePath() {
   const el = $("saveToPath"); if (!el) return;
-  if (settings.saveTo !== "project") { el.textContent = settings.saveTo; return; }
+  const sub = S.view === "batch" ? "/" + folderName(S.batch.title) : ""; // playlists get a folder of their own
+  if (settings.saveTo !== "project") { el.textContent = settings.saveTo + sub; return; }
   const folder = await projectFolder();
-  if ($("saveToPath")) $("saveToPath").textContent = folder || "Save your project first. Until then, files go to Movies/Pluck.";
+  if ($("saveToPath")) $("saveToPath").textContent = folder ? folder + sub : "Save your project first. Until then, files go to Movies/Pluck.";
 }
 
 function setSaveTo(value) {
@@ -482,7 +488,7 @@ function vError() {
   const e = S.error || {};
   const title = { auth: "This video needs you to sign in", private: "This video is private", age: "Age-restricted video",
     unsupported: "This site isn't supported yet", unavailable: "Video not available", network: "Connection problem",
-    tools: "Pluck's download tool is missing" }[e.code] || "Couldn't get this video";
+    tools: "Pluck's download tool is missing", privatefolder: "This folder isn't shared", novideos: "No videos found" }[e.code] || "Couldn't get this video";
   main.innerHTML = `
     ${pasteRow()}
     <div class="card result bad" style="margin-top:14px">
@@ -493,6 +499,195 @@ function vError() {
     </div>`;
   bindPaste();
   if ($("retry")) $("retry").addEventListener("click", () => { if (S.info) return go("ready"); const u = S.url; S.url = ""; lookup(u); });
+}
+
+/* ---------------- Playlists and folders ---------------- */
+// Every video is listed and ticked. One quality for all, no clipping. They download one at a time into a folder
+// named after the playlist, and each is imported as soon as it's done, into a bin of the same name.
+const BIG_BATCH = 200; // at this many videos Pluck asks before starting
+
+function newBatch(info) {
+  return Object.assign({}, info, { confirm: false, cancelled: false, current: -1,
+    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null })) });
+}
+const picked = () => S.batch.entries.filter(e => e.checked);
+const batchBin = () => `${settings.bin} › ${folderName(S.batch.title)}`;
+
+function batchCard() {
+  const b = S.batch, total = b.entries.reduce((t, e) => t + e.duration, 0);
+  return `
+    <div class="card vid">
+      ${b.thumbnail ? `<div class="thumb"><img src="${esc(b.thumbnail)}" alt=""></div>` : ""}
+      <div class="vid-meta">
+        <div class="platform">${esc(b.platform)} · ${b.platform === "Google Drive" ? "folder" : "playlist"}</div>
+        <div class="vid-title">${esc(b.title)}</div>
+        <div class="vid-by">${[b.uploader, `${b.entries.length} video${b.entries.length === 1 ? "" : "s"}`, total ? fmt(total) : ""].filter(Boolean).map(esc).join(" · ")}</div>
+      </div>
+    </div>`;
+}
+
+function itemLength(e) { return e.duration ? fmt(e.duration) : e.size ? mb(e.size) : ""; }
+
+function vBatch() {
+  const b = S.batch, items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
+  main.innerHTML = `
+    ${pasteRow()}
+    <div style="margin-top:12px">${batchCard()}</div>
+    <div class="list-head">
+      <span class="label" id="pickedCount"></span>
+      <span class="spacer"></span>
+      <button class="btn small" id="pickAll">Select all</button>
+      <button class="btn small" id="pickNone">Select none</button>
+    </div>
+    <div class="list" id="list">
+      ${b.entries.map((e, i) => `
+        <label class="item">
+          <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
+          <span class="item-n">${i + 1}</span>
+          <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
+          <span class="item-len">${itemLength(e)}</span>
+        </label>`).join("")}
+    </div>
+    ${b.platform === "Google Drive" ? `<div class="hint">Drive videos come as the original files, whatever the quality.${b.capped ? " Google only shows Pluck the first 50 files in a folder." : ""}</div>` : ""}
+    <div class="divider"></div>
+    <div class="opts">
+      <div>
+        <label class="label" for="quality">Quality</label>
+        <select class="input full" id="quality">
+          ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <div class="label">Import to bin</div>
+        <div class="binname" title="${esc(batchBin())}">${esc(batchBin())}</div>
+      </div>
+    </div>
+    <div class="set">
+      <label class="label" for="saveTo">Save to</label>
+      ${saveToPicker()}
+      <div class="sub" id="saveToPath"></div>
+    </div>
+    <div class="action" id="batchAction"></div>`;
+  bindPaste();
+  bindSaveTo();
+  $("quality").addEventListener("change", e => { S.quality = e.target.value; });
+  document.querySelectorAll("#list input").forEach(c => c.addEventListener("change", () => {
+    b.entries[c.dataset.i].checked = c.checked; b.confirm = false; updatePicked();
+  }));
+  const pickAll = on => { b.entries.forEach(e => { e.checked = on; }); document.querySelectorAll("#list input").forEach(c => { c.checked = on; }); b.confirm = false; updatePicked(); };
+  $("pickAll").addEventListener("click", () => pickAll(true));
+  $("pickNone").addEventListener("click", () => pickAll(false));
+  updatePicked();
+}
+
+// The count, the button, and (for very long lists) the "are you sure" step.
+function updatePicked() {
+  const b = S.batch, n = picked().length, all = n === b.entries.length;
+  $("pickedCount").textContent = `${n} of ${b.entries.length} selected`;
+  const box = $("batchAction");
+  if (b.confirm) {
+    box.innerHTML = `
+      <div class="card confirm">
+        <div class="result-title">Download ${n} videos?</div>
+        <div class="result-text">That's a lot. It can take hours and fill up your disk. You can cancel at any time and keep what's already done.</div>
+        <div class="result-actions"><button class="btn" id="confirmNo">Go back</button><button class="btn primary" id="confirmYes">Download ${n} videos</button></div>
+      </div>`;
+    $("confirmNo").addEventListener("click", () => { b.confirm = false; updatePicked(); });
+    $("confirmYes").addEventListener("click", startBatch);
+    return;
+  }
+  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? "Select videos to download" : all ? `Download all (${n})` : `Download selected (${n})`}</button>`;
+  $("download").addEventListener("click", () => {
+    if (n >= BIG_BATCH) { b.confirm = true; return updatePicked(); }
+    startBatch();
+  });
+}
+
+async function startBatch() {
+  if (settings.saveTo !== "project" && !require("fs").existsSync(settings.saveTo)) {
+    setSaveTo("project"); render();
+    return toast("That folder isn't available anymore, so Pluck switched back to your project folder.");
+  }
+  const b = S.batch;
+  b.outDir = (await downloadFolder() || require("path").join(require("os").homedir(), "Movies", "Pluck")) + "/" + folderName(b.title);
+  b.cancelled = false; b.confirm = false;
+  b.entries.forEach(e => { e.status = e.checked ? "waiting" : null; e.error = null; });
+  go("batchRun");
+  const todo = picked();
+  for (let i = 0; i < todo.length && !b.cancelled; i++) {
+    const e = todo[i];
+    b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null });
+    updateBatchRun();
+    const job = await new Promise(resolve => {
+      const t = setInterval(() => { updateBatchRun(); if (/done|error|cancelled/.test(e.job.status)) { clearInterval(t); resolve(e.job); } }, 400);
+    });
+    if (job.status === "cancelled") break;
+    if (job.status === "error") { e.status = "failed"; e.error = job.error.message; continue; }
+    e.status = "importing"; updateBatchRun();
+    try { await importIntoPremiere(job.file, folderName(b.title)); e.status = "done"; }
+    catch (err) { e.status = "failed"; e.error = err.message; }
+  }
+  todo.forEach(e => { if (e.status === "waiting" || e.status === "downloading") e.status = "skipped"; });
+  go("batchDone");
+}
+
+const ITEM_STATE = { waiting: "", downloading: "active", importing: "active", done: "done", failed: "failed", skipped: "" };
+
+function vBatchRun() {
+  main.innerHTML = `
+    ${batchCard()}
+    <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+    <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
+    <div class="list run" id="list">
+      ${picked().map((e, i) => `
+        <div class="item step" id="it${i}">
+          <span class="dot"></span>
+          <span class="item-title" title="${esc(e.title)}">${esc(e.title)}<span class="item-err"></span></span>
+          <span class="item-len">${itemLength(e)}</span>
+        </div>`).join("")}
+    </div>
+    <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
+  $("cancel").addEventListener("click", () => {
+    S.batch.cancelled = true;
+    picked().forEach(e => { if (e.job && e.status === "downloading") engine.cancel(e.job); });
+    $("cancel").disabled = true; $("cancel").textContent = "Stopping…";
+  });
+  updateBatchRun();
+}
+
+function updateBatchRun() {
+  if (S.view !== "batchRun") return;
+  const todo = picked(), n = todo.length, i = S.batch.current, e = todo[i];
+  todo.forEach((x, k) => {
+    const el = $("it" + k); if (!el) return;
+    el.className = "item step " + ITEM_STATE[x.status];
+    el.querySelector(".item-err").textContent = x.error ? " · " + x.error : "";
+  });
+  if (!e) return;
+  // Overall bar: finished videos plus how far the current one has got.
+  const pct = e.status === "importing" ? 100 : (e.job && e.job.percent) || 0;
+  $("barFill").style.width = ((i + pct / 100) / n) * 100 + "%";
+  $("barLabel").textContent = `${i + 1} of ${n} · ${e.status === "importing" ? "Importing…"
+    : e.job && e.job.status === "processing" ? "Finishing up…" : pct ? `Downloading · ${pct}%` : "Getting ready…"}`;
+  $("barRight").textContent = e.status === "downloading" && e.job ? e.job.speed || "" : "";
+  if (S.batch.current !== S.batch.shown) { S.batch.shown = S.batch.current; const el = $("it" + i); if (el) el.scrollIntoView({ block: "nearest" }); }
+}
+
+function vBatchDone() {
+  const b = S.batch, todo = picked(), done = todo.filter(e => e.status === "done").length;
+  const failed = todo.filter(e => e.status === "failed"), skipped = todo.filter(e => e.status === "skipped").length;
+  const title = b.cancelled ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
+  main.innerHTML = `
+    <div class="card result ${done ? "ok" : "bad"}">
+      <div class="result-icon">${done ? "✓" : "!"}</div>
+      <div class="result-title">${esc(title)}</div>
+      <div class="result-text">${done ? `Find them in the “${esc(batchBin())}” bin.` : "Nothing was added to your project."}
+        ${skipped ? ` ${skipped} not downloaded.` : ""}</div>
+      ${failed.length ? `<div class="fails">${failed.map(e => `<div><b>${esc(e.title)}</b><br>${esc(e.error)}</div>`).join("")}</div>` : ""}
+      <div class="file">${esc(b.outDir)}</div>
+      <div class="result-actions"><button class="btn primary" id="again">Download another link</button></div>
+    </div>`;
+  $("again").addEventListener("click", () => go("empty", { url: "", info: null, batch: null }));
 }
 
 /* ---------------- Settings sheet ---------------- */
@@ -508,7 +703,7 @@ async function openSettings() {
 
 function initSettings() {
   $("openSettings").addEventListener("click", openSettings);
-  $("closeSettings").addEventListener("click", () => { $("settings").classList.add("hidden"); if (S.view === "ready") render(); });
+  $("closeSettings").addEventListener("click", () => { $("settings").classList.add("hidden"); if (S.view === "ready" || S.view === "batch") render(); });
 
   const bin = $("setBin");
   bin.value = settings.bin;

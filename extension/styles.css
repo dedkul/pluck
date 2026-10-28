@@ -134,6 +134,28 @@ a:hover { text-decoration: underline; }
 .step.done .dot::after { content: "✓"; color: #fff; font-size: 9px; font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Playlist / folder list */
+.list-head { display: flex; align-items: center; gap: 6px; margin-top: 14px; }
+.list-head .label { margin: 0; }
+.list { margin-top: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(0, 0, 0, 0.15); }
+.item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.item:last-child { border-bottom: 0; }
+.item:hover { background: var(--bg-2); }
+.item input { margin: 0; flex: none; accent-color: var(--accent-2); }
+.item-n { color: var(--dim); font-size: 10px; min-width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+.item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-len { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+.item-err { color: var(--err); }
+.list.run { margin-top: 14px; }
+.list.run .item { cursor: default; }
+.list.run .item:hover { background: none; }
+.step.failed { color: var(--muted); }
+.step.failed .dot { background: var(--err); border-color: var(--err); }
+.step.failed .dot::after { content: "!"; color: #fff; font-size: 9px; font-weight: 700; }
+.confirm { padding: 14px; text-align: center; }
+.fails { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left; color: var(--muted); font-size: 11px; }
+.fails b { color: var(--text); font-weight: 600; }
+
 /* Result */
 .result { padding: 18px 14px; text-align: center; }
 .result-icon { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 10px; font-size: 18px; font-weight: 700; }
