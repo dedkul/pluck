@@ -183,7 +183,7 @@ async function lookup(raw) {
   try {
     const info = await engine.info(url);
     if (S.view !== "loading" || S.url !== url) return;
-    go("ready", Object.assign({ info }, clipDefaults(info)));
+    go("ready", Object.assign({ info, quality: settings.quality }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
     go("error", { error: e });
@@ -252,7 +252,10 @@ function updateClip() {
     if (document.activeElement !== $("tB")) $("tB").value = fmt(S.end);
     $("len").textContent = fmt(S.end - S.start);
   }
-  const audio = S.quality === "audio";
+  const audio = S.quality === "audio" || S.quality === "wav";
+  $("qualityHint").textContent = engine.needsConversion(S.quality)
+    ? "Takes longer: sites send 1440p and 4K in a format Premiere can't open, so Pluck converts it after downloading."
+    : S.quality === "original" ? "Saves the file exactly as the site sends it (often WebM). Premiere may not open it, and clips start a few seconds early." : "";
   $("download").textContent = clip
     ? `Download ${audio ? "audio clip" : "clip"} (${fmt(S.end - S.start)})`
     : audio ? "Download audio" : "Download video";
@@ -330,8 +333,29 @@ function bindClip() {
   }));
 }
 
+// Only offer sizes this video actually has, labelled with the real size and its frame rate when above 30 fps.
+// Each choice covers the sizes down to the next one (a 1600-pixel-tall film shows as "1600p" under the 4K choice).
+// Sites that don't list sizes get the usual 1080p / 720p / 480p.
+function qualityItems(info) {
+  const sizes = info.sizes || [], tops = [2160, 1440, 1080, 720, 480];
+  let video = tops.map((h, i) => {
+    const fit = sizes.filter(f => f.height <= h && f.height > (tops[i + 1] || 0));
+    if (!fit.length) return null;
+    const best = Math.max(...fit.map(f => f.height)), fps = Math.max(...fit.filter(f => f.height === best).map(f => f.fps));
+    return [h + "p", (best === 2160 ? "4K" : best + "p") + (fps > 30 ? ` · ${fps} fps` : "")];
+  }).filter(Boolean);
+  if (!video.length) video = [["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]];
+  video[0][1] += " (best)";
+  return video.concat([["audio", "Audio only (M4A)"], ["wav", "Audio only (WAV)"], ["original", "Original file (no conversion)"]]);
+}
+
 function vReady() {
-  const items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
+  const items = qualityItems(S.info);
+  // The default from Settings may be bigger than this video goes; fall back to the best it has.
+  if (!items.some(([v]) => v === S.quality)) {
+    const smaller = items.find(([v]) => parseInt(v, 10) <= parseInt(S.quality, 10));
+    S.quality = (smaller || items[0])[0];
+  }
   main.innerHTML = `
     ${pasteRow()}
     <div style="margin-top:12px">${videoCard()}</div>
@@ -343,6 +367,7 @@ function vReady() {
         <select class="input full" id="quality">
           ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
         </select>
+        <div class="sub" id="qualityHint" style="margin-top:5px"></div>
       </div>
       <div>
         <div class="label">Import to bin</div>
@@ -420,13 +445,16 @@ async function startDownload() {
 }
 
 function vDownloading() {
+  // A full 1440p/4K video gets its own "Converting" step; a clip is converted while it downloads.
+  const converts = engine.needsConversion(S.quality) && S.mode !== "clip";
   main.innerHTML = `
     ${videoCard()}
     <div class="bar ${S.mode === "clip" ? "hidden" : ""}"><div class="bar-fill" id="barFill"></div></div>
     <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
     <div class="steps">
-      <div class="step" id="st0"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
-      <div class="step" id="st1"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
+      <div class="step"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
+      ${converts ? `<div class="step"><span class="dot"></span>Converting for Premiere</div>` : ""}
+      <div class="step"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
     </div>
     <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
   setStep(0);
@@ -434,7 +462,7 @@ function vDownloading() {
 }
 
 function setStep(n) {
-  [0, 1].forEach(i => { const el = $("st" + i); if (el) el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
+  document.querySelectorAll(".step").forEach((el, i) => { el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
 }
 
 let importing = false;
@@ -442,20 +470,27 @@ async function pollJob() {
   const job = S.job;
   if (S.view !== "downloading" || importing) return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
-  // yt-dlp can't report a percentage while cutting a clip, so show time spent instead of a bar that never moves.
+  const half = engine.needsConversion(S.quality) ? 0.45 : 0.9; // converting videos: download fills the first half
+  // A clip's percentage comes from ffmpeg's progress; until the first report, show time spent.
   if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
-    label.textContent = `Cutting your clip · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
-  } else if (job.status === "downloading") {
+    const what = engine.needsConversion(S.quality) ? "Downloading and converting your clip" : "Cutting your clip";
+    fill.parentNode.classList.toggle("hidden", !job.percent);
     fill.style.width = job.percent * 0.9 + "%";
+    label.textContent = job.percent ? `${what} · ${job.percent}%` : `${what} · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
+  } else if (job.status === "downloading") {
+    fill.style.width = job.percent * half + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
     right.textContent = job.speed || "";
   } else if (job.status === "processing") {
-    fill.style.width = "90%"; label.textContent = "Finishing up…"; right.textContent = "";
+    fill.style.width = half * 100 + "%"; label.textContent = "Finishing up…"; right.textContent = "";
+  } else if (job.status === "converting") {
+    setStep(1);
+    fill.style.width = 45 + job.percent * 0.45 + "%"; label.textContent = `Converting for Premiere · ${job.percent}%`; right.textContent = "";
   } else if (job.status === "error") {
     go("error", { error: job.error });
   } else if (job.status === "done") {
     clearInterval(S.poll);
-    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(1);
+    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(document.querySelectorAll(".step").length - 1);
     importing = true;
     try {
       await importIntoPremiere(job.file);

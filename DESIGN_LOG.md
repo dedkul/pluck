@@ -204,6 +204,32 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified yet:** anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
 - **Catch:** this only helps from the version that includes it. v0.3.3 went out without it, so anyone on v0.3.3 or older installs v0.3.4 by hand one last time.
 
+## Entry 17 — 4K, 1440p, 60 fps, WAV and "Original file"
+
+- **Problem:** people asked why there's no 4K. Pluck only picks H.264 video, the kind Premiere opens straight away, and YouTube only sends H.264 up to 1080p. Anything bigger comes as VP9 or AV1, which Premiere can't open. The menu also listed 1080p even for a 720p video.
+- **Decision:** 1440p and 4K download the best video at that size, then Pluck converts it to H.264 MP4 with its built-in ffmpeg. The menu now lists only the sizes the video really has, with the frame rate when it's above 30 fps (e.g. "4K · 60 fps"). Also new: "Audio only (WAV)" next to M4A, and "Original file (no conversion)" for people who want exactly what the site sends.
+- **Which format to convert to? Measured, not guessed.** A 30-second piece of *Sound Asleep* (a Creative Commons 4K film, VP9, 24 fps), converted on an M4 Pro Mac. Pluck's Mac ffmpeg is an Intel build running through Rosetta, so an Apple Silicon build would be faster:
+
+  | Converted to | Time for 30 s of 4K | File size |
+  |---|---|---|
+  | **H.264, "veryfast", quality 18 (chosen)** | **15.9 s** | **56 MB** |
+  | H.264, "fast", quality 18 | 33.0 s | 67 MB |
+  | H.264, Mac's hardware encoder | 12.6 s | 211 MB |
+  | HEVC (H.265), software | 106.4 s | 35 MB |
+  | HEVC, Mac's hardware encoder | didn't start under Rosetta; software fallback took 221.6 s | 75 MB |
+  | ProRes 422 Proxy, software | 38.2 s | 536 MB |
+  | ProRes 422 Proxy, Mac's hardware encoder | 4.8 s | 533 MB |
+
+- **Why H.264 "veryfast":** nearly as fast as the hardware encoder at a quarter of the size, works the same way on Windows (the hardware encoders are Mac-only), and Premiere edits it smoothly. HEVC makes the smallest files but is 7–14× slower and heavier to edit. ProRes is the editor's favourite but makes files ~10× bigger (about 1 GB per minute even at the "Proxy" level), and its fast version is Mac-only. Quality 18 is the usual "looks the same as the source" setting; at "fast" the file got bigger without looking better.
+- **What it costs you:** the menu says plainly that 1440p and 4K take longer, and progress shows a separate "Converting for Premiere" step with a real percentage. Pluck reads how far ffmpeg has got and divides it by the video's length. On this Mac, 4K at 24 fps converts in about half the video's length, and 4K at 60 fps in about 0.9× its length.
+- **60 fps:** kept on by default. When a video has 60 fps, you get 60 fps at every size, like on YouTube. Premiere plays 60 fps footage in a 24/30 fps timeline without fuss, and throwing frames away can't be undone. The catch is slower 4K conversion, which is why the menu shows the frame rate.
+- **Clips got faster and show a percentage:** a 4K clip used to be re-cut by ffmpeg's VP9 encoder. A 10-second 4K clip took 74 s, then wouldn't open in Premiere. Now it's cut and converted to H.264 in one pass: 12 s. Every clip now shows a real percentage instead of a seconds counter.
+- **HDR:** Pluck prefers the normal (SDR) version, because HDR squeezed into an ordinary H.264 file looks washed out.
+- **"Original file" clips** start at the nearest keyframe, a few seconds before the chosen start (4.6 s in our test), because cutting exactly would mean re-encoding. The menu says so.
+- **Verified on Mac** with real downloads, checked with ffprobe: 4K 60 fps clip → H.264 3840×2160 at 60 fps + AAC; 1080p 60 fps clip → H.264 1080p60; 1440p full video → converted to H.264, original deleted; WAV clip → PCM WAV; M4A → AAC; Original clip → VP9 WebM, unchanged. A full 3-minute 4K 60 fps video: 180 s to download, 165 s to convert (the percentage counted up steadily), and the result is H.264 3840×2160 at 60 fps, 944 MB (detailed nature footage at 60 fps is about 300 MB a minute). Cancelling halfway through converting left the folder empty.
+- **Not verified yet:** importing these files inside Premiere, and anything on Windows. Windows has no hardware encoder in the plan, so it relies on software H.264 there too.
+
+
 ---
 
 ## Roadmap (reordered after Entry 7)
