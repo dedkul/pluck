@@ -188,7 +188,8 @@ function createEngine(extensionRoot) {
 
   // Starts a download and returns a job object that updates itself; the panel just reads it.
   // clip = { start, end } in seconds, or null for the full video.
-  function download({ url, outDir, quality, clip }) {
+  // copy = 2, 3, … saves a fresh copy next to one already downloaded, leaving the old file alone.
+  function download({ url, outDir, quality, clip, copy }) {
     const job = { status: "downloading", percent: 0, speed: "", file: null, error: null, proc: null };
     outDir = outDir || path.join(os.homedir(), "Movies", "Pluck");
     try { fs.mkdirSync(outDir, { recursive: true }); }
@@ -199,7 +200,7 @@ function createEngine(extensionRoot) {
       "--no-playlist", "--newline", "--progress", "--no-mtime", "--windows-filenames",
       "--progress-template", "download:PLUCK %(progress._percent_str)s|%(progress._speed_str)s",
       "--print", "after_move:PLUCKFILE %(filepath)s",
-      "-o", path.join(outDir, clip ? `%(title).80B [${stamp(clip.start)} to ${stamp(clip.end)}] [%(id)s].%(ext)s` : "%(title).80B [%(id)s].%(ext)s"),
+      "-o", path.join(outDir, clip ? `%(title).80B [${stamp(clip.start)} to ${stamp(clip.end)}] [%(id)s].%(ext)s` : `%(title).80B [%(id)s]${copy ? ` (${copy})` : ""}.%(ext)s`),
       // Clips: fetch only that stretch, and re-cut the edges so the clip starts exactly where asked.
       ...(clip ? ["--download-sections", `*${clip.start}-${clip.end}`, "--force-keyframes-at-cuts"] : []),
       ...(FFMPEG ? ["--ffmpeg-location", path.dirname(FFMPEG)] : []),

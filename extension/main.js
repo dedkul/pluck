@@ -513,7 +513,7 @@ const BIG_BATCH = 200; // at this many videos Pluck asks before starting
 
 function newBatch(info) {
   return Object.assign({}, info, { confirm: false, cancelled: false, stopAfter: false, current: -1,
-    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null, already: false })) });
+    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null, already: false, again: false })) });
 }
 
 async function batchFolder(b) {
@@ -567,21 +567,8 @@ function vBatch() {
       <button class="btn small" id="pickNone">Select none</button>
     </div>
     <div class="list" id="list">
-      ${b.entries.map((e, i) => e.already ? `
-        <div class="item had" title="Already in this playlist's folder">
-          <span class="had-mark">✓</span>
-          <span class="item-n">${i + 1}</span>
-          <span class="item-title">${esc(e.title)}</span>
-          <span class="had-tag">Downloaded</span>
-        </div>` : `
-        <label class="item">
-          <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
-          <span class="item-n">${i + 1}</span>
-          <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
-          <span class="item-len">${itemLength(e)}</span>
-        </label>`).join("")}
-    </div>
-    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already downloaded, so they're left out.</div>` : ""}
+${b.entries.map(batchRow).join("")}</div>
+    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already downloaded. To get a fresh copy of one, click “Download again”.</div>` : ""}
     ${b.platform === "Google Drive" ? `<div class="hint">Drive videos come as the original files, whatever the quality.${b.capped ? " Google only shows Pluck the first 50 files in a folder." : ""}</div>` : ""}
     <div class="divider"></div>
     <div class="opts">
@@ -605,13 +592,49 @@ function vBatch() {
   bindPaste();
   bindSaveTo();
   $("quality").addEventListener("change", e => { S.quality = e.target.value; });
-  document.querySelectorAll("#list input").forEach(c => c.addEventListener("change", () => {
-    b.entries[c.dataset.i].checked = c.checked; b.confirm = false; updatePicked();
-  }));
-  const pickAll = on => { b.entries.forEach(e => { e.checked = on && !e.already; }); document.querySelectorAll("#list input").forEach(c => { c.checked = on; }); b.confirm = false; updatePicked(); };
+  bindRows();
+  // Select all leaves out videos already downloaded; Select none also takes back any "Download again".
+  const pickAll = on => { b.entries.forEach(e => { if (!on) e.again = false; e.checked = on && (!e.already || e.again); }); b.confirm = false; redrawRows(); };
   $("pickAll").addEventListener("click", () => pickAll(true));
   $("pickNone").addEventListener("click", () => pickAll(false));
   updatePicked();
+}
+
+// Videos already downloaded have no checkbox (so Select all can't pick them by mistake), only a "Download again"
+// button. That ticks the row; the new download is saved as a separate copy, so the old file and clip stay as they are.
+function batchRow(e, i) {
+  return e.already && !e.again ? `
+    <div class="item had" title="Already in this playlist's folder">
+      <span class="had-mark">✓</span>
+      <span class="item-n">${i + 1}</span>
+      <span class="item-title">${esc(e.title)}</span>
+      <button class="btn small again" data-i="${i}">Download again</button>
+    </div>` : `
+    <label class="item">
+      <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
+      <span class="item-n">${i + 1}</span>
+      <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
+      ${e.again ? `<span class="again-tag">New copy</span>` : `<span class="item-len">${itemLength(e)}</span>`}
+    </label>`;
+}
+function bindRows() {
+  const b = S.batch;
+  document.querySelectorAll("#list input").forEach(c => c.addEventListener("change", () => {
+    const e = b.entries[c.dataset.i];
+    e.checked = c.checked; b.confirm = false;
+    if (e.again && !c.checked) { e.again = false; return redrawRows(); } // unticked: back to "Downloaded"
+    updatePicked();
+  }));
+  document.querySelectorAll("#list .again").forEach(btn => btn.addEventListener("click", () => {
+    const e = b.entries[btn.dataset.i];
+    e.again = e.checked = true; b.confirm = false; redrawRows();
+  }));
+}
+function redrawRows() {
+  const list = $("list"), top = list.scrollTop;
+  list.innerHTML = S.batch.entries.map(batchRow).join("");
+  list.scrollTop = top;
+  bindRows(); updatePicked();
 }
 
 // The count, the button, and (for very long lists) the "are you sure" step.
@@ -653,8 +676,10 @@ async function startBatch() {
     const e = todo[i];
     // Checked again here, not only when the list opened: a ticked video may already be in the folder (ticked back by
     // hand, or the list was read before the folder could be). It isn't downloaded or imported a second time.
-    if (haveFile(finishedFiles(b.outDir), e)) { e.status = "had"; continue; }
-    b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null });
+    const names = finishedFiles(b.outDir);
+    if (!e.again && haveFile(names, e)) { e.status = "had"; continue; }
+    const copy = e.again ? names.filter(n => n.indexOf(`[${e.id}]`) !== -1).length + 1 : 0;
+    b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null, copy });
     updateBatchRun();
     const job = await new Promise(resolve => {
       const t = setInterval(() => { updateBatchRun(); if (/done|error|cancelled/.test(e.job.status)) { clearInterval(t); resolve(e.job); } }, 400);
