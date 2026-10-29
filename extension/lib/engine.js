@@ -128,7 +128,7 @@ function createEngine(extensionRoot) {
   // and each of those is a whole playlist of its own, so they're left out.
   function playlistInfo(j, url) {
     const entries = (j.entries || []).filter(e => e && (e.url || e.webpage_url) && e._type !== "playlist" && !/Tab|Playlist/.test(e.ie_key || ""))
-      .map(e => ({ title: e.title || "Untitled video", url: e.url || e.webpage_url, duration: e.duration || 0, size: 0 }));
+      .map(e => ({ title: e.title || "Untitled video", url: e.url || e.webpage_url, id: e.id || "", duration: e.duration || 0, size: 0 }));
     if (!entries.length) return Promise.reject({ code: "novideos", message: (j.entries || []).length
       ? "This link is a channel or a list of playlists. Open one playlist and copy its link."
       : "There are no videos in this playlist." });
@@ -175,7 +175,7 @@ function createEngine(extensionRoot) {
       catch (e) { throw { code: "unknown", message: "Couldn't read this Google Drive folder." }; }
       // Each item is [id, [parent], name, type, …, size at 13].
       const entries = items.filter(it => /^video\//.test(it[3]))
-        .map(it => ({ title: it[2], url: "https://drive.google.com/file/d/" + it[0] + "/view", duration: 0, size: Number(it[13]) || 0 }));
+        .map(it => ({ title: it[2], url: "https://drive.google.com/file/d/" + it[0] + "/view", id: it[0], duration: 0, size: Number(it[13]) || 0 }));
       if (!entries.length) throw { code: "novideos", message: items.some(it => /folder$/.test(it[3]))
         ? "There are no videos directly in this folder. Open a subfolder and copy its link."
         : "There are no videos in this folder." };

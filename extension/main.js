@@ -187,7 +187,12 @@ async function lookup(raw) {
   try {
     const info = await engine.info(url);
     if (S.view !== "loading" || S.url !== url) return;
-    if (info.playlist) return go("batch", { info: null, batch: newBatch(info) });
+    if (info.playlist) {
+      const batch = newBatch(info);
+      await markDownloaded(batch);
+      if (S.view !== "loading" || S.url !== url) return;
+      return go("batch", { info: null, batch });
+    }
     go("ready", Object.assign({ info }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
@@ -507,8 +512,29 @@ function vError() {
 const BIG_BATCH = 200; // at this many videos Pluck asks before starting
 
 function newBatch(info) {
-  return Object.assign({}, info, { confirm: false, cancelled: false, current: -1,
-    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null })) });
+  return Object.assign({}, info, { confirm: false, cancelled: false, stopAfter: false, current: -1,
+    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null, already: false })) });
+}
+
+async function batchFolder(b) {
+  return (await downloadFolder() || require("path").join(require("os").homedir(), "Movies", "Pluck")) + "/" + folderName(b.title);
+}
+
+// Picking up where you left off: videos already in this playlist's folder (from an earlier, stopped run) start
+// unticked. File names end in "[video id]", which is how they're recognised. Half-finished pieces don't count.
+async function markDownloaded(b) {
+  let names = [];
+  try { names = require("fs").readdirSync(await batchFolder(b)); } catch (e) { return; } // no folder yet: nothing done
+  names = names.filter(n => !/\.(part|ytdl)$|\.f\d+\.\w+$|\.part-Frag\d+$/.test(n));
+  b.entries.forEach(e => {
+    if (e.id && names.some(n => n.indexOf(`[${e.id}]`) !== -1)) { e.already = true; e.checked = false; }
+  });
+}
+
+// 1500 s -> "about 25 min". Only a rough guess, so no seconds.
+function fmtLeft(sec) {
+  const m = Math.round(sec / 60);
+  return m < 1 ? "under a minute" : m < 60 ? `about ${m} min` : `about ${Math.floor(m / 60)} h ${m % 60} min`;
 }
 const picked = () => S.batch.entries.filter(e => e.checked);
 const batchBin = () => `${settings.bin} › ${folderName(S.batch.title)}`;
@@ -545,9 +571,10 @@ function vBatch() {
           <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
           <span class="item-n">${i + 1}</span>
           <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
-          <span class="item-len">${itemLength(e)}</span>
+          <span class="item-len">${e.already ? "Already downloaded" : itemLength(e)}</span>
         </label>`).join("")}
     </div>
+    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already in this playlist's folder, so they're unticked.</div>` : ""}
     ${b.platform === "Google Drive" ? `<div class="hint">Drive videos come as the original files, whatever the quality.${b.capped ? " Google only shows Pluck the first 50 files in a folder." : ""}</div>` : ""}
     <div class="divider"></div>
     <div class="opts">
@@ -582,21 +609,22 @@ function vBatch() {
 
 // The count, the button, and (for very long lists) the "are you sure" step.
 function updatePicked() {
-  const b = S.batch, n = picked().length, all = n === b.entries.length;
+  const b = S.batch, n = picked().length, all = n === b.entries.length, hours = picked().reduce((t, e) => t + e.duration, 0) / 3600;
   $("pickedCount").textContent = `${n} of ${b.entries.length} selected`;
   const box = $("batchAction");
   if (b.confirm) {
     box.innerHTML = `
       <div class="card confirm">
         <div class="result-title">Download ${n} videos?</div>
-        <div class="result-text">That's a lot. It can take hours and fill up your disk. You can cancel at any time and keep what's already done.</div>
+        <div class="result-text">That's a lot${hours >= 1 ? `: about ${Math.round(hours)} hours of video` : ""}. It can take hours and fill up your disk. You can stop at any time, keep what's done, and paste the link again later to get the rest.</div>
         <div class="result-actions"><button class="btn" id="confirmNo">Go back</button><button class="btn primary" id="confirmYes">Download ${n} videos</button></div>
       </div>`;
     $("confirmNo").addEventListener("click", () => { b.confirm = false; updatePicked(); });
     $("confirmYes").addEventListener("click", startBatch);
     return;
   }
-  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? "Select videos to download" : all ? `Download all (${n})` : `Download selected (${n})`}</button>`;
+  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? "Select videos to download" : all ? `Download all (${n})`
+    : b.entries.every(e => e.checked || e.already) ? `Download the rest (${n})` : `Download selected (${n})`}</button>`;
   $("download").addEventListener("click", () => {
     if (n >= BIG_BATCH) { b.confirm = true; return updatePicked(); }
     startBatch();
@@ -609,12 +637,12 @@ async function startBatch() {
     return toast("That folder isn't available anymore, so Pluck switched back to your project folder.");
   }
   const b = S.batch;
-  b.outDir = (await downloadFolder() || require("path").join(require("os").homedir(), "Movies", "Pluck")) + "/" + folderName(b.title);
-  b.cancelled = false; b.confirm = false;
+  b.outDir = await batchFolder(b);
+  b.cancelled = false; b.stopAfter = false; b.confirm = false; b.startedAt = Date.now();
   b.entries.forEach(e => { e.status = e.checked ? "waiting" : null; e.error = null; });
   go("batchRun");
   const todo = picked();
-  for (let i = 0; i < todo.length && !b.cancelled; i++) {
+  for (let i = 0; i < todo.length && !b.cancelled && !b.stopAfter; i++) {
     const e = todo[i];
     b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null });
     updateBatchRun();
@@ -646,11 +674,19 @@ function vBatchRun() {
           <span class="item-len">${itemLength(e)}</span>
         </div>`).join("")}
     </div>
-    <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
+    <div class="action two">
+      <button class="btn big" id="stopAfter">Stop after this video</button>
+      <button class="btn big" id="cancel">Cancel now</button>
+    </div>`;
+  // Stop after this video: the one downloading finishes and is imported, then nothing else starts.
+  $("stopAfter").addEventListener("click", () => {
+    S.batch.stopAfter = true;
+    $("stopAfter").disabled = true; $("stopAfter").textContent = "Stopping after this one…";
+  });
   $("cancel").addEventListener("click", () => {
     S.batch.cancelled = true;
     picked().forEach(e => { if (e.job && e.status === "downloading") engine.cancel(e.job); });
-    $("cancel").disabled = true; $("cancel").textContent = "Stopping…";
+    $("cancel").disabled = $("stopAfter").disabled = true; $("cancel").textContent = "Stopping…";
   });
   updateBatchRun();
 }
@@ -669,20 +705,22 @@ function updateBatchRun() {
   $("barFill").style.width = ((i + pct / 100) / n) * 100 + "%";
   $("barLabel").textContent = `${i + 1} of ${n} · ${e.status === "importing" ? "Importing…"
     : e.job && e.job.status === "processing" ? "Finishing up…" : pct ? `Downloading · ${pct}%` : "Getting ready…"}`;
-  $("barRight").textContent = e.status === "downloading" && e.job ? e.job.speed || "" : "";
+  // Time left: once one video is finished, assume the rest go at the same pace as the batch so far.
+  const progress = i + pct / 100, left = i >= 1 ? (Date.now() - S.batch.startedAt) / 1000 / progress * (n - progress) : 0;
+  $("barRight").textContent = left ? `${fmtLeft(left)} left` : e.status === "downloading" && e.job ? e.job.speed || "" : "";
   if (S.batch.current !== S.batch.shown) { S.batch.shown = S.batch.current; const el = $("it" + i); if (el) el.scrollIntoView({ block: "nearest" }); }
 }
 
 function vBatchDone() {
   const b = S.batch, todo = picked(), done = todo.filter(e => e.status === "done").length;
   const failed = todo.filter(e => e.status === "failed"), skipped = todo.filter(e => e.status === "skipped").length;
-  const title = b.cancelled ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
+  const title = skipped ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
   main.innerHTML = `
     <div class="card result ${done ? "ok" : "bad"}">
       <div class="result-icon">${done ? "✓" : "!"}</div>
       <div class="result-title">${esc(title)}</div>
       <div class="result-text">${done ? `Find them in the “${esc(batchBin())}” bin.` : "Nothing was added to your project."}
-        ${skipped ? ` ${skipped} not downloaded.` : ""}</div>
+        ${skipped ? ` ${skipped} not downloaded yet. Paste the same link again to get them: Pluck skips the ones you already have.` : ""}</div>
       ${failed.length ? `<div class="fails">${failed.map(e => `<div><b>${esc(e.title)}</b><br>${esc(e.error)}</div>`).join("")}</div>` : ""}
       <div class="file">${esc(b.outDir)}</div>
       <div class="result-actions"><button class="btn primary" id="again">Download another link</button></div>

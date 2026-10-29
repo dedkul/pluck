@@ -119,6 +119,7 @@ a:hover { text-decoration: underline; }
 .binname { padding: 7px 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .action { margin-top: 18px; }
 .action .sub { margin-top: 6px; text-align: center; }
+.action.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 /* Progress */
 .bar { height: 6px; background: #3a3a3a; border-radius: 3px; overflow: hidden; margin-top: 16px; }
