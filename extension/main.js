@@ -142,7 +142,7 @@ function pasteRow(error, hint) {
     <div class="field">
       <div class="input-wrap">
         <input class="input ${error ? "bad" : ""}" id="url" placeholder="Paste a YouTube, X or Instagram link" value="${esc(S.url)}" spellcheck="false">
-        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link">×</button>
+        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
       <button class="btn primary ${S.url ? "hidden" : ""}" id="paste">Paste link</button>
     </div>
