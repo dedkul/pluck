@@ -91,9 +91,11 @@ function createEngine(extensionRoot) {
 
   // Start yt-dlp. UTF-8 so titles in any language survive (Windows otherwise uses its old local text encoding).
   // On Mac it gets its own process group, so stop() can end the ffmpeg it starts too.
+  // The Mac ffmpeg can't find the system's web certificates on its own, so clips (which ffmpeg downloads) would fail without SSL_CERT_FILE.
+  const CERTS = process.platform === "darwin" && !process.env.SSL_CERT_FILE && fs.existsSync("/etc/ssl/cert.pem") ? { SSL_CERT_FILE: "/etc/ssl/cert.pem" } : {};
   function runYtdlp(args) {
     const proc = spawn(YTDLP, args, {
-      env: Object.assign({}, process.env, { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }),
+      env: Object.assign({}, process.env, CERTS, { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }),
       detached: process.platform !== "win32",
     });
     proc.stdout.setEncoding("utf8"); // decode across chunk edges, or a letter split in two turns into "�"
