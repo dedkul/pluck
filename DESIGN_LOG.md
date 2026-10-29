@@ -204,6 +204,18 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified yet:** anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
 - **Catch:** this only helps from the version that includes it. v0.3.3 went out without it, so anyone on v0.3.3 or older installs v0.3.4 by hand one last time.
 
+## Entry 17 — ffmpeg runs natively on Apple Silicon
+*2026-10-30*
+
+- **Problem:** the Mac ffmpeg we shipped (from evermeet.cx) is built only for Intel Macs. On M-series Macs it runs through Rosetta, Apple's translator, which makes it about half as fast. That didn't matter much for 1080p, but 4K and 1440p now get converted for Premiere, so ffmpeg's speed is now waiting time for the user. Some faster Apple features (like the hardware HEVC encoder) also refuse to start under Rosetta.
+- **Decision:** switch to Martin Riedl's static ffmpeg builds (martin-riedl.de). They come in both Apple Silicon and Intel versions, include everything Pluck needs (H.264, AAC, VP9/AV1, MP4/MKV/WebM), are GPL like before, and are signed with an Apple Developer ID. The download script glues the two versions into one "universal" file, so every Mac automatically runs the version made for it. No change to how Pluck finds its tools.
+- **Trust trade-off:** ffmpeg.org only links an Intel build for Mac, so this source isn't one ffmpeg.org points to (Entry 12's rule). Why it's still OK: a long-running public build server with its build script published, Apple-signed files, and a checksum checked on every download.
+- **Numbers (M4 Pro, 30 s of 4K 60 fps VP9 → H.264, same settings Pluck uses):** old Intel build 21.3 s, new build 12.4 s. About 1.7× faster. The Intel half of the new file, run through Rosetta, took 22.5 s, the same as the old one, so nothing gets worse.
+- **Surprise found while testing:** the new ffmpeg couldn't check website security certificates on its own, so every clip download failed ("ffmpeg exited with code 251"). Clips are the one case where ffmpeg downloads directly. Fix: Pluck now tells it where macOS keeps its certificates. Tested both ways: without the fix the clip fails, with it the clip downloads.
+- **Verified on Mac:** a 1080p clip, a 4K clip (H.264 + AAC, 3840×2160 at 60 fps) and a full video converted after download all came out right.
+- **Cost:** the Mac release zip grows from about 107 MB to 176 MB, because it now holds two copies of ffmpeg (one per chip). Worth it for halving the wait on the Macs most people have now.
+- **Not verified:** on a real Intel Mac (only the Intel half through Rosetta), or inside Premiere.
+
 ---
 
 ## Roadmap (reordered after Entry 7)

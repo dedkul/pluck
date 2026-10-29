@@ -1,6 +1,7 @@
 #!/bin/bash
 # Downloads yt-dlp and ffmpeg into extension/bin/<platform>/ so Pluck needs nothing else installed.
-# Sources are the ones ffmpeg.org and yt-dlp officially point to. Checksums are verified where published.
+# Sources are the ones ffmpeg.org and yt-dlp officially point to, plus martin-riedl.de for native Apple Silicon ffmpeg.
+# Checksums are verified where published.
 #
 #   scripts/fetch-tools.sh mac   # macOS (default on a Mac)
 #   scripts/fetch-tools.sh win   # Windows 64-bit
@@ -33,13 +34,18 @@ if [[ "$PLATFORM" == "mac" ]]; then
   unzip -qo "$OUT/yt-dlp_macos.zip" -d "$OUT/yt-dlp_macos"
   mv "$OUT/yt-dlp_macos/yt-dlp_macos" "$OUT/yt-dlp_macos/yt-dlp"
   rm "$OUT/yt-dlp_macos.zip"
-  # evermeet.cx: the macOS static build linked from ffmpeg.org (Intel; runs via Rosetta on Apple Silicon).
+  # martin-riedl.de: static GPL builds signed with an Apple Developer ID, for both Apple Silicon and Intel.
+  # The two are joined into one universal file, so each Mac runs its own native code (no Rosetta, ~2x faster on M-series).
   for tool in ffmpeg ffprobe; do
-    echo "→ $tool (evermeet.cx)"
-    url="$(curl -fsSL "https://evermeet.cx/ffmpeg/info/$tool/release" | python3 -c 'import json,sys; print(json.load(sys.stdin)["download"]["zip"]["url"])')"
-    curl -fsSL "$url" -o "$TMP/$tool.zip"
-    unzip -qo "$TMP/$tool.zip" -d "$TMP/$tool"
-    mv "$TMP/$tool/$tool" "$OUT/$tool"
+    for arch in arm64 amd64; do
+      echo "→ $tool $arch (martin-riedl.de)"
+      url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$arch/release/$tool.zip")"
+      curl -fsSL "$url" -o "$TMP/$tool-$arch.zip"
+      want="$(curl -fsSL "$url.sha256" | cut -d' ' -f1)"
+      [[ "$(sha256 "$TMP/$tool-$arch.zip")" == "$want" ]] || { echo "Checksum mismatch for $tool ($arch)"; exit 1; }
+      unzip -qo "$TMP/$tool-$arch.zip" -d "$TMP/$arch"
+    done
+    lipo -create "$TMP/arm64/$tool" "$TMP/amd64/$tool" -output "$OUT/$tool"
     chmod +x "$OUT/$tool"
   done
 elif [[ "$PLATFORM" == "win" ]]; then
