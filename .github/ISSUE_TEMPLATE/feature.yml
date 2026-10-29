@@ -1,0 +1,15 @@
+name: Request a feature
+description: An idea that would make Pluck better for your editing.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Pluck to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: When would you use it?
+      description: A real moment from your editing helps us get it right.
