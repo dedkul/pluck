@@ -204,7 +204,56 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified yet:** anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
 - **Catch:** this only helps from the version that includes it. v0.3.3 went out without it, so anyone on v0.3.3 or older installs v0.3.4 by hand one last time.
 
-## Entry 17 — ffmpeg runs natively on Apple Silicon
+## Entry 17 — Whole playlists and Drive folders in one go
+*2026-10-28*
+
+- **Problem:** editors often get footage as a YouTube playlist or a shared Google Drive folder. Pluck only took one video at a time, so 12 videos meant pasting 12 links. Pasting a playlist link didn't even work: Pluck tried to look up every video in it first and gave up or got confused.
+- **Decision:** paste a playlist or folder link and Pluck shows a list of its videos, all ticked, with "Select all" / "Select none", one quality for everything and a "Download all (12)" button. No clip step: trimming 12 videos one by one belongs in Premiere.
+- **How it runs:** one video at a time, with "3 of 12" and one bar for the whole batch. Each video is imported as soon as it's done, so Cancel keeps everything finished so far. A video that fails (removed, private) is marked with the reason and skipped; the rest carry on. The end screen says how many were added and lists what failed and why.
+- **Where things go:** files in a folder named after the playlist, inside the usual save folder. In Premiere, a bin of the same name inside "Web Downloads". A whole playlist stays together and doesn't flood the main bin.
+- **Very long lists:** at 200 or more videos Pluck asks first ("That's a lot. It can take hours and fill up your disk."), so a mis-pasted channel-sized playlist doesn't quietly start an all-night download.
+- **What if it's going to take all night?** (the user asked this after the first version, rightly; I had only built "Cancel")
+  - **Time left:** once the first video is done, the panel shows "about 25 min left", based on how fast the batch has gone so far. The 200+ question also says how many hours of video that is.
+  - **Two ways to stop:** "Stop after this video" lets the current one finish and import cleanly; "Cancel now" stops straight away. Both keep everything already done.
+  - **Pick up later instead of pause:** paste the same link again and videos already in that playlist's folder show as "Already downloaded" and start unticked, so the button says "Download the rest (N)". Nothing is downloaded or imported twice. Half-finished pieces from a stopped download don't count as done.
+  - **Why not a real pause button:** a pause would have to survive closing Premiere to be useful. Pick-up-later does that for free, because what's done is simply the files in the folder.
+- **Why one at a time, not several at once:** it's simpler to follow, YouTube is less likely to slow us down, and a failure only affects one video.
+- **A link to one video inside a playlist** (`watch?v=…&list=…`) still means just that video, as before. A channel link is turned away with "open one playlist and copy its link", because a channel is many playlists.
+- **Google Drive surprise #1:** yt-dlp's own Drive-folder reader is broken (an open bug on their side). Pluck now reads the folder's page itself to get the file list, then hands each video to yt-dlp as a normal Drive file. Limits: Google's page lists only the first 50 files, and videos inside subfolders aren't included. Pluck says both.
+- **Google Drive surprise #2:** Drive videos were coming down as Google's small 360p preview (0.5 MB) rather than the file that was uploaded (1.7 MB). Pluck now always takes the original Drive file, so footage arrives at full quality. This also fixes single Drive file links.
+- **Verified on Mac:** real downloads from a public YouTube playlist (Blender's open movies, Creative Commons) and a public Drive folder of Pixabay clips, saved into the right folders; Drive files match the uploaded size exactly. The panel screens (select all/none, the 200+ question, a failing video being skipped, Cancel halfway) were clicked through in a browser with a stand-in for Premiere. A private folder, a folder with only subfolders, and a channel link each show a clear message.
+- **Not verified yet:** the import into the named sub-bin inside a real Premiere, and anything on Windows. Also: if you change "Save to" while looking at a playlist, the "Already downloaded" marks aren't re-checked until you paste the link again.
+
+## Entry 18 — 4K, 1440p, 60 fps and WAV
+
+- **Problem:** people asked why there's no 4K. Pluck only picks H.264 video, the kind Premiere opens straight away, and YouTube only sends H.264 up to 1080p. Anything bigger comes as VP9 or AV1, which Premiere can't open. The menu also listed 1080p even for a 720p video.
+- **Decision:** 1440p and 4K download the best video at that size, then Pluck converts it to H.264 MP4 with its built-in ffmpeg. The menu now lists only the sizes the video really has, with the frame rate when it's above 30 fps (e.g. "4K · 60 fps"). Also new: "Audio only (WAV)" next to M4A.
+- **Which format to convert to? Measured, not guessed.** A 30-second piece of *Sound Asleep* (a Creative Commons 4K film, VP9, 24 fps), converted on an M4 Pro Mac. Pluck's Mac ffmpeg is an Intel build running through Rosetta, so an Apple Silicon build would be faster:
+
+  | Converted to | Time for 30 s of 4K | File size |
+  |---|---|---|
+  | **H.264, "veryfast", quality 18 (chosen)** | **15.9 s** | **56 MB** |
+  | H.264, "fast", quality 18 | 33.0 s | 67 MB |
+  | H.264, Mac's hardware encoder | 12.6 s | 211 MB |
+  | HEVC (H.265), software | 106.4 s | 35 MB |
+  | HEVC, Mac's hardware encoder | didn't start under Rosetta; software fallback took 221.6 s | 75 MB |
+  | ProRes 422 Proxy, software | 38.2 s | 536 MB |
+  | ProRes 422 Proxy, Mac's hardware encoder | 4.8 s | 533 MB |
+
+- **Why H.264 "veryfast":** nearly as fast as the hardware encoder at a quarter of the size, works the same way on Windows (the hardware encoders are Mac-only), and Premiere edits it smoothly. HEVC makes the smallest files but is 7–14× slower and heavier to edit. ProRes is the editor's favourite but makes files ~10× bigger (about 1 GB per minute even at the "Proxy" level), and its fast version is Mac-only. Quality 18 is the usual "looks the same as the source" setting; at "fast" the file got bigger without looking better.
+- **What it costs you:** the menu says plainly that 1440p and 4K take longer, and progress shows a separate "Converting for Premiere" step with a real percentage. Pluck reads how far ffmpeg has got and divides it by the video's length. On this Mac, 4K at 24 fps converts in about half the video's length, and 4K at 60 fps in about 0.9× its length.
+- **60 fps:** kept on by default. When a video has 60 fps, you get 60 fps at every size, like on YouTube. Premiere plays 60 fps footage in a 24/30 fps timeline without fuss, and throwing frames away can't be undone. The catch is slower 4K conversion, which is why the menu shows the frame rate.
+- **Clips got faster and show a percentage:** a 4K clip used to be re-cut by ffmpeg's VP9 encoder. A 10-second 4K clip took 74 s, then wouldn't open in Premiere. Now it's cut and converted to H.264 in one pass: 12 s. Every clip now shows a real percentage instead of a seconds counter.
+- **No "is it frozen?" moments:** before you download, the menu says roughly how much extra time converting adds for this video or clip (e.g. "Roughly 3 min extra"). While it works, every step shows a percentage plus "about 2 min left", worked out from how fast that step is moving. The old clip counter just counted seconds up with no end in sight, so it's gone.
+- **Audio quality:** the M4A option shows the real bitrate the site sends (e.g. "M4A · 130 kbps"). We didn't add "192 / 320 kbps" choices, because YouTube's best audio is about 130–160 kbps and converting to a bigger number only makes a bigger file, not better sound. WAV is there for editing: uncompressed, nothing lost again.
+- **Apple Silicon would make converting twice as fast:** the same 30 s 4K test took 15.6 s with Pluck's Intel ffmpeg (through Rosetta) and 7.9 s with a native Apple Silicon ffmpeg on the same Mac. yt-dlp is already native. Switching the bundled Mac ffmpeg is the next step (it's on the v1.0 list).
+- **HDR:** Pluck prefers the normal (SDR) version, because HDR squeezed into an ordinary H.264 file looks washed out.
+- **"Original file" tried and removed:** we briefly offered the file exactly as the site sends it (no conversion). Tested inside Premiere: a 4K WebM gave "File format not supported", while the converted 4K file imported fine. A choice that fails in Premiere breaks Pluck's whole promise, so it's gone. (One gap left: on a site with no H.264 at all, 1080p and below could still come as another format. YouTube always has H.264 up to 1080p.)
+- **Playlists keep 1080p and below** (plus M4A and WAV): videos in a list come in different sizes, and a 4K default would quietly turn a 20-video playlist into a very long conversion.
+- **Verified on Mac** with real downloads, checked with ffprobe: 4K 60 fps clip → H.264 3840×2160 at 60 fps + AAC; 1080p 60 fps clip → H.264 1080p60; 1440p full video → converted to H.264, original deleted; WAV clip → PCM WAV; M4A → AAC. A full 3-minute 4K 60 fps video: 180 s to download, 165 s to convert (the percentage counted up steadily), and the result is H.264 3840×2160 at 60 fps, 944 MB (detailed nature footage at 60 fps is about 300 MB a minute). Cancelling halfway through converting left the folder empty.
+- **Verified inside Premiere:** a 4K download of a trailer converted and imported fine. **Not verified yet:** anything on Windows. Windows has no hardware encoder in the plan, so it relies on software H.264 there too.
+
+## Entry 19 — ffmpeg runs natively on Apple Silicon
 *2026-10-30*
 
 - **Problem:** the Mac ffmpeg we shipped (from evermeet.cx) is built only for Intel Macs. On M-series Macs it runs through Rosetta, Apple's translator, which makes it about half as fast. That didn't matter much for 1080p, but 4K and 1440p now get converted for Premiere, so ffmpeg's speed is now waiting time for the user. Some faster Apple features (like the hardware HEVC encoder) also refuse to start under Rosetta.
@@ -218,17 +267,39 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 
 ---
 
-## Roadmap (reordered after Entry 7)
+## Roadmap (updated after Entry 18)
 
-| Version | What ships |
+**Done so far**
+
+| Version | What shipped |
 |---|---|
 | **v0.0** | HTML design prototype (`prototype/index.html`). No real downloading. |
 | **v0.1** | Paste a YouTube link → download → auto-import into a "Web Downloads" bin. Mac. |
-| **v0.2** | Trim: range slider + timestamp boxes. Measure speed and audio sync. |
-| **v0.3** | Switch to CEP with yt-dlp + ffmpeg built in: nothing extra to install. Premiere 2022+. |
-| **v0.4** | Test X + Instagram, Windows; in-panel YouTube search, GIF search (GIPHY), download history |
-| **v1.0** | Signed one-click installer for Mac + Windows, native Apple Silicon ffmpeg, auto-update yt-dlp |
-| **By late 2028** | Rebuild as a UXP Hybrid plugin before CEP is switched off; transcript search to find a quote and clip it |
+| **v0.2** | Trim: range slider + timestamp boxes. |
+| **v0.3** | CEP panel with yt-dlp + ffmpeg built in: nothing extra to install. Premiere 2022+, Mac and Windows. One-click updates (v0.3.4). |
+
+**Next, in order.** Each step makes the next one easier, so the order matters more than the dates.
+
+| When | What | Why now |
+|---|---|---|
+| **v0.4** (now) | 4K / 1440p with conversion, honest quality menu, time-left indicator (Entry 18); whole playlists | The most-asked-for features, and they work in the framework we have. |
+| **v0.5** | Native Apple Silicon ffmpeg | Converting gets about 2× faster on M-series Macs (measured: 7.9 s vs 15.6 s). Directly shortens the 4K wait. |
+| **v0.6** | Keep yt-dlp up to date automatically | Sites change every few weeks and break downloads. Today the fix only arrives when we ship a new Pluck. This is the biggest "it stopped working" risk. |
+| **v1.0** | Signed installer for Mac and Windows; test X, Instagram and Windows properly | Without signing, macOS and Windows may block the bundled tools. Signing makes Pluck feel trustworthy to install. |
+| **2027** | Start the UXP Hybrid rebuild (details below) | It has to be finished and tested well before CEP switches off in Dec 2028. |
+| **Later** | In-panel YouTube search, GIF search, download history, transcript search (find a quote and clip it) | Nice to have. None of these get easier by doing them before the rebuild. Most would have to be rebuilt anyway. |
+
+**The long-term problem: Pluck's framework has an end date.** Pluck is a CEP panel. Adobe switches CEP off by default in Dec 2028 and removes it in Dec 2029. After that Pluck simply won't load. The replacement is UXP, but a plain UXP plugin isn't allowed to run outside programs like yt-dlp and ffmpeg, and Pluck can't work without them. The way through is a **UXP Hybrid** plugin: UXP for the panel, plus a small native helper (C++, built for Mac and Windows) that runs the tools (Entry 8).
+
+**Why this is less scary than it sounds**
+- **The engine moves over almost unchanged.** Downloading, converting, progress and error messages live in their own file (`lib/engine.js`) and don't touch the panel. That split was on purpose (Entry 8), and every feature since has kept it.
+- **The panel is plain HTML/CSS/JS,** which UXP also uses. The screens mostly carry over; what gets rewritten is the import into Premiere (ExtendScript → Premiere's UXP API) and the way the panel talks to the engine.
+- **The design work is done.** The flows, copy and decisions in this log stay the same. Only the plumbing changes.
+
+**What it costs**
+- **Older Premiere drops off:** UXP Hybrid needs Premiere 2025.6 or newer, so people on Premiere 2022–2024 stay on the last CEP version of Pluck. It will keep working for them until Adobe removes CEP.
+- **A C++ helper to build and sign** for two platforms. That's new skills for this project, and the main reason to start in 2027, not 2028.
+- **Rule until then:** new features go into `engine.js` where possible, not into panel-only code, so less has to be redone.
 
 ## Open risks
 

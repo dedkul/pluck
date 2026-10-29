@@ -91,6 +91,9 @@ function extractUrl(text) {
 function esc(s) { return String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function baseName(p) { return String(p).split(/[\\/]/).pop(); }
 function dirName(p) { const parts = String(p).split(/[\\/]/); parts.pop(); return parts.join("/"); }
+// A playlist name made safe to use as a folder name on Mac and Windows.
+function folderName(s) { return String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/[. ]+$/, "").trim().slice(0, 80) || "Playlist"; }
+function mb(bytes) { return bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + " GB" : Math.max(0.1, bytes / 1e6).toFixed(1) + " MB"; }
 let toastTimer;
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("on");
@@ -107,8 +110,8 @@ async function downloadFolder() {
   return settings.saveTo === "project" ? projectFolder() : settings.saveTo;
 }
 
-async function importIntoPremiere(file) {
-  const r = await host("pluckImport", file, settings.bin);
+async function importIntoPremiere(file, subBin) {
+  const r = await host("pluckImport", file, settings.bin, subBin || "");
   // The download itself worked, so always say where the file is; it can be dragged in by hand.
   if (!r.ok) throw { message: /saved here/.test(r.message) ? r.message : `${r.message} The file is saved here: ${file}` };
 }
@@ -130,7 +133,8 @@ function go(view, patch) {
 }
 
 function render() {
-  ({ empty: vEmpty, loading: vLoading, ready: vReady, downloading: vDownloading, done: vDone, error: vError })[S.view]();
+  ({ empty: vEmpty, loading: vLoading, ready: vReady, downloading: vDownloading, done: vDone, error: vError,
+    batch: vBatch, batchRun: vBatchRun, batchDone: vBatchDone })[S.view]();
 }
 
 /* ---------------- Views ---------------- */
@@ -142,7 +146,7 @@ function pasteRow(error, hint) {
     <div class="field">
       <div class="input-wrap">
         <input class="input ${error ? "bad" : ""}" id="url" placeholder="Paste a YouTube, X or Instagram link" value="${esc(S.url)}" spellcheck="false">
-        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link">×</button>
+        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
       <button class="btn primary ${S.url ? "hidden" : ""}" id="paste">Paste link</button>
     </div>
@@ -177,13 +181,19 @@ async function lookup(raw) {
   if (!String(raw || "").trim()) return;
   const url = extractUrl(raw);
   if (!url) { S.url = String(raw).trim(); return vEmpty("That doesn't look like a link. Copy the full address from your browser."); }
-  if (url === S.url && S.view === "ready") return;
+  if (url === S.url && (S.view === "ready" || S.view === "batch")) return;
   S.url = url;
   go("loading");
   try {
     const info = await engine.info(url);
     if (S.view !== "loading" || S.url !== url) return;
-    go("ready", Object.assign({ info }, clipDefaults(info)));
+    if (info.playlist) {
+      const batch = newBatch(info);
+      await markDownloaded(batch);
+      if (S.view !== "loading" || S.url !== url) return;
+      return go("batch", { info: null, batch });
+    }
+    go("ready", Object.assign({ info, quality: settings.quality }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
     go("error", { error: e });
@@ -242,6 +252,23 @@ function clipSection() {
 }
 
 // One place that keeps the slider, the time fields, the length and the button text in step.
+// How long converting will add, from our test on an M4 Pro Mac (DESIGN_LOG Entry 18): 4K takes about half the
+// video's length at 24-30 fps and about 0.9x at 60 fps. Slower computers take longer, hence "roughly".
+function convertGuess() {
+  const h = parseInt(S.quality, 10), fit = (S.info.sizes || []).filter(f => f.height <= h);
+  const fps = Math.max(0, ...fit.map(f => f.fps));
+  const s = (S.mode === "clip" ? S.end - S.start : S.info.duration) * (fps > 30 ? 0.9 : 0.5);
+  return s < 60 ? "under a minute" : `${Math.round(s / 60)} min`;
+}
+
+// "about 2 min left", from how fast the percentage has been climbing in this step.
+function timeLeft(step, pct) {
+  if (S.step !== step) Object.assign(S, { step, stepAt: Date.now() });
+  if (pct < 3) return "";
+  const s = ((Date.now() - S.stepAt) / 1000) * (100 - pct) / pct;
+  return s < 60 ? `about ${Math.max(5, Math.round(s / 5) * 5)} s left` : `about ${Math.round(s / 60)} min left`;
+}
+
 function updateClip() {
   const clip = S.mode === "clip";
   if ($("fill")) {
@@ -252,7 +279,10 @@ function updateClip() {
     if (document.activeElement !== $("tB")) $("tB").value = fmt(S.end);
     $("len").textContent = fmt(S.end - S.start);
   }
-  const audio = S.quality === "audio";
+  const audio = S.quality === "audio" || S.quality === "wav";
+  $("qualityHint").textContent = engine.needsConversion(S.quality)
+    ? `Takes longer: Premiere can't open 1440p or 4K the way sites send it, so Pluck converts it. Roughly ${convertGuess()} extra for this ${clip ? "clip" : "video"}.`
+    : "";
   $("download").textContent = clip
     ? `Download ${audio ? "audio clip" : "clip"} (${fmt(S.end - S.start)})`
     : audio ? "Download audio" : "Download video";
@@ -330,8 +360,31 @@ function bindClip() {
   }));
 }
 
+// Only offer sizes this video actually has, labelled with the real size and its frame rate when above 30 fps.
+// Each choice covers the sizes down to the next one (a 1600-pixel-tall film shows as "1600p" under the 4K choice).
+// Sites that don't list sizes get the usual 1080p / 720p / 480p.
+function qualityItems(info) {
+  const sizes = info.sizes || [], tops = [2160, 1440, 1080, 720, 480];
+  let video = tops.map((h, i) => {
+    const fit = sizes.filter(f => f.height <= h && f.height > (tops[i + 1] || 0));
+    if (!fit.length) return null;
+    const best = Math.max(...fit.map(f => f.height)), fps = Math.max(...fit.filter(f => f.height === best).map(f => f.fps));
+    return [h + "p", (best === 2160 ? "4K" : best + "p") + (fps > 30 ? ` · ${fps} fps` : "")];
+  }).filter(Boolean);
+  if (!video.length) video = [["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]];
+  video[0][1] += " (best)";
+  // Audio is offered as the site sends it: asking for a higher bitrate than the source can't add quality.
+  const kbps = info.audioKbps ? ` · ${info.audioKbps} kbps` : "";
+  return video.concat([["audio", `Audio only (M4A${kbps})`], ["wav", "Audio only (WAV, uncompressed)"]]);
+}
+
 function vReady() {
-  const items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
+  const items = qualityItems(S.info);
+  // The default from Settings may be bigger than this video goes; fall back to the best it has.
+  if (!items.some(([v]) => v === S.quality)) {
+    const smaller = items.find(([v]) => parseInt(v, 10) <= parseInt(S.quality, 10));
+    S.quality = (smaller || items[0])[0];
+  }
   main.innerHTML = `
     ${pasteRow()}
     <div style="margin-top:12px">${videoCard()}</div>
@@ -343,6 +396,7 @@ function vReady() {
         <select class="input full" id="quality">
           ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
         </select>
+        <div class="sub" id="qualityHint" style="margin-top:5px"></div>
       </div>
       <div>
         <div class="label">Import to bin</div>
@@ -378,9 +432,10 @@ function saveToPicker() {
 
 async function showSavePath() {
   const el = $("saveToPath"); if (!el) return;
-  if (settings.saveTo !== "project") { el.textContent = settings.saveTo; return; }
+  const sub = S.view === "batch" ? "/" + folderName(S.batch.title) : ""; // playlists get a folder of their own
+  if (settings.saveTo !== "project") { el.textContent = settings.saveTo + sub; return; }
   const folder = await projectFolder();
-  if ($("saveToPath")) $("saveToPath").textContent = folder || "Save your project first. Until then, files go to Movies/Pluck.";
+  if ($("saveToPath")) $("saveToPath").textContent = folder ? folder + sub : "Save your project first. Until then, files go to Movies/Pluck.";
 }
 
 function setSaveTo(value) {
@@ -414,19 +469,22 @@ async function startDownload() {
   const outDir = await downloadFolder();
   const clip = S.mode === "clip" ? { start: S.start, end: S.end } : null;
   const job = engine.download({ url: S.info.url, quality: S.quality, outDir, clip });
-  S.startedAt = Date.now();
+  S.startedAt = Date.now(); S.step = null;
   go("downloading", { job });
   S.poll = setInterval(pollJob, 400);
 }
 
 function vDownloading() {
+  // A full 1440p/4K video gets its own "Converting" step; a clip is converted while it downloads.
+  const converts = engine.needsConversion(S.quality) && S.mode !== "clip";
   main.innerHTML = `
     ${videoCard()}
     <div class="bar ${S.mode === "clip" ? "hidden" : ""}"><div class="bar-fill" id="barFill"></div></div>
     <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
     <div class="steps">
-      <div class="step" id="st0"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
-      <div class="step" id="st1"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
+      <div class="step"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
+      ${converts ? `<div class="step"><span class="dot"></span>Converting for Premiere</div>` : ""}
+      <div class="step"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
     </div>
     <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
   setStep(0);
@@ -434,7 +492,7 @@ function vDownloading() {
 }
 
 function setStep(n) {
-  [0, 1].forEach(i => { const el = $("st" + i); if (el) el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
+  document.querySelectorAll(".step").forEach((el, i) => { el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
 }
 
 let importing = false;
@@ -442,20 +500,29 @@ async function pollJob() {
   const job = S.job;
   if (S.view !== "downloading" || importing) return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
-  // yt-dlp can't report a percentage while cutting a clip, so show time spent instead of a bar that never moves.
+  const half = engine.needsConversion(S.quality) ? 0.45 : 0.9; // converting videos: download fills the first half
+  // A clip's percentage comes from ffmpeg's progress report, which starts a few seconds in.
   if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
-    label.textContent = `Cutting your clip · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
-  } else if (job.status === "downloading") {
+    const what = engine.needsConversion(S.quality) ? "Downloading and converting your clip" : "Cutting your clip";
+    fill.parentNode.classList.toggle("hidden", !job.percent);
     fill.style.width = job.percent * 0.9 + "%";
+    label.textContent = job.percent ? `${what} · ${job.percent}%` : `${what}…`;
+    right.textContent = timeLeft("clip", job.percent);
+  } else if (job.status === "downloading") {
+    fill.style.width = job.percent * half + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
-    right.textContent = job.speed || "";
+    right.textContent = [job.speed, timeLeft("download", job.percent)].filter(Boolean).join(" · ");
   } else if (job.status === "processing") {
-    fill.style.width = "90%"; label.textContent = "Finishing up…"; right.textContent = "";
+    fill.style.width = half * 100 + "%"; label.textContent = "Finishing up…"; right.textContent = "";
+  } else if (job.status === "converting") {
+    setStep(1);
+    fill.style.width = 45 + job.percent * 0.45 + "%"; label.textContent = `Converting for Premiere · ${job.percent}%`;
+    right.textContent = timeLeft("convert", job.percent);
   } else if (job.status === "error") {
     go("error", { error: job.error });
   } else if (job.status === "done") {
     clearInterval(S.poll);
-    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(1);
+    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(document.querySelectorAll(".step").length - 1);
     importing = true;
     try {
       await importIntoPremiere(job.file);
@@ -482,7 +549,7 @@ function vError() {
   const e = S.error || {};
   const title = { auth: "This video needs you to sign in", private: "This video is private", age: "Age-restricted video",
     unsupported: "This site isn't supported yet", unavailable: "Video not available", network: "Connection problem",
-    tools: "Pluck's download tool is missing" }[e.code] || "Couldn't get this video";
+    tools: "Pluck's download tool is missing", privatefolder: "This folder isn't shared", novideos: "No videos found" }[e.code] || "Couldn't get this video";
   main.innerHTML = `
     ${pasteRow()}
     <div class="card result bad" style="margin-top:14px">
@@ -493,6 +560,267 @@ function vError() {
     </div>`;
   bindPaste();
   if ($("retry")) $("retry").addEventListener("click", () => { if (S.info) return go("ready"); const u = S.url; S.url = ""; lookup(u); });
+}
+
+/* ---------------- Playlists and folders ---------------- */
+// Every video is listed and ticked. One quality for all, no clipping. They download one at a time into a folder
+// named after the playlist, and each is imported as soon as it's done, into a bin of the same name.
+const BIG_BATCH = 200; // at this many videos Pluck asks before starting
+
+function newBatch(info) {
+  return Object.assign({}, info, { confirm: false, cancelled: false, stopAfter: false, current: -1,
+    entries: info.entries.map(e => Object.assign({}, e, { checked: true, status: null, error: null, already: false, again: false })) });
+}
+
+async function batchFolder(b) {
+  return (await downloadFolder() || require("path").join(require("os").homedir(), "Movies", "Pluck")) + "/" + folderName(b.title);
+}
+
+// Picking up where you left off: videos already in this playlist's folder (from an earlier, stopped run) start
+// unticked. File names end in "[video id]", which is how they're recognised. Half-finished pieces don't count.
+function finishedFiles(folder) {
+  try { return require("fs").readdirSync(folder).filter(n => !/\.(part|ytdl)$|\.f\d+\.\w+$|\.part-Frag\d+$/.test(n)); }
+  catch (e) { return []; } // no folder yet: nothing done
+}
+const haveFile = (names, e) => e.id && names.some(n => n.indexOf(`[${e.id}]`) !== -1);
+async function markDownloaded(b) {
+  const names = finishedFiles(await batchFolder(b));
+  b.entries.forEach(e => { if (haveFile(names, e)) { e.already = true; e.checked = false; } });
+}
+
+// 1500 s -> "about 25 min". Only a rough guess, so no seconds.
+function fmtLeft(sec) {
+  const m = Math.round(sec / 60);
+  return m < 1 ? "under a minute" : m < 60 ? `about ${m} min` : `about ${Math.floor(m / 60)} h ${m % 60} min`;
+}
+const picked = () => S.batch.entries.filter(e => e.checked);
+const batchBin = () => `${settings.bin} › ${folderName(S.batch.title)}`;
+
+function batchCard() {
+  const b = S.batch, total = b.entries.reduce((t, e) => t + e.duration, 0);
+  return `
+    <div class="card vid">
+      ${b.thumbnail ? `<div class="thumb"><img src="${esc(b.thumbnail)}" alt=""></div>` : ""}
+      <div class="vid-meta">
+        <div class="platform">${esc(b.platform)} · ${b.platform === "Google Drive" ? "folder" : "playlist"}</div>
+        <div class="vid-title">${esc(b.title)}</div>
+        <div class="vid-by">${[b.uploader, `${b.entries.length} video${b.entries.length === 1 ? "" : "s"}`, total ? fmt(total) : ""].filter(Boolean).map(esc).join(" · ")}</div>
+      </div>
+    </div>`;
+}
+
+function itemLength(e) { return e.duration ? fmt(e.duration) : e.size ? mb(e.size) : ""; }
+
+function vBatch() {
+  // Sizes differ from video to video in a list, so it keeps the sizes every site sends ready for Premiere.
+  const b = S.batch, items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only (M4A)"], ["wav", "Audio only (WAV)"]];
+  if (!items.some(([v]) => v === S.quality)) S.quality = "1080p"; // a 4K default would quietly convert every video
+  main.innerHTML = `
+    ${pasteRow()}
+    <div style="margin-top:12px">${batchCard()}</div>
+    <div class="list-head">
+      <span class="label" id="pickedCount"></span>
+      <span class="spacer"></span>
+      <button class="btn small" id="pickAll">Select all</button>
+      <button class="btn small" id="pickNone">Select none</button>
+    </div>
+    <div class="list" id="list">
+${b.entries.map(batchRow).join("")}</div>
+    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already downloaded. To get a fresh copy of one, click “Download again”.</div>` : ""}
+    ${b.platform === "Google Drive" ? `<div class="hint">Drive videos come as the original files, whatever the quality.${b.capped ? " Google only shows Pluck the first 50 files in a folder." : ""}</div>` : ""}
+    <div class="divider"></div>
+    <div class="opts">
+      <div>
+        <label class="label" for="quality">Quality</label>
+        <select class="input full" id="quality">
+          ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <div class="label">Import to bin</div>
+        <div class="binname" title="${esc(batchBin())}">${esc(batchBin())}</div>
+      </div>
+    </div>
+    <div class="set">
+      <label class="label" for="saveTo">Save to</label>
+      ${saveToPicker()}
+      <div class="sub" id="saveToPath"></div>
+    </div>
+    <div class="action" id="batchAction"></div>`;
+  bindPaste();
+  bindSaveTo();
+  $("quality").addEventListener("change", e => { S.quality = e.target.value; });
+  bindRows();
+  // Select all leaves out videos already downloaded; Select none also takes back any "Download again".
+  const pickAll = on => { b.entries.forEach(e => { if (!on) e.again = false; e.checked = on && (!e.already || e.again); }); b.confirm = false; redrawRows(); };
+  $("pickAll").addEventListener("click", () => pickAll(true));
+  $("pickNone").addEventListener("click", () => pickAll(false));
+  updatePicked();
+}
+
+// Videos already downloaded have no checkbox (so Select all can't pick them by mistake), only a "Download again"
+// button. That ticks the row; the new download is saved as a separate copy, so the old file and clip stay as they are.
+function batchRow(e, i) {
+  return e.already && !e.again ? `
+    <div class="item had" title="Already in this playlist's folder">
+      <span class="had-mark">✓</span>
+      <span class="item-n">${i + 1}</span>
+      <span class="item-title">${esc(e.title)}</span>
+      <button class="btn small again" data-i="${i}">Download again</button>
+    </div>` : `
+    <label class="item">
+      <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
+      <span class="item-n">${i + 1}</span>
+      <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
+      ${e.again ? `<span class="again-tag">New copy</span>` : `<span class="item-len">${itemLength(e)}</span>`}
+    </label>`;
+}
+function bindRows() {
+  const b = S.batch;
+  document.querySelectorAll("#list input").forEach(c => c.addEventListener("change", () => {
+    const e = b.entries[c.dataset.i];
+    e.checked = c.checked; b.confirm = false;
+    if (e.again && !c.checked) { e.again = false; return redrawRows(); } // unticked: back to "Downloaded"
+    updatePicked();
+  }));
+  document.querySelectorAll("#list .again").forEach(btn => btn.addEventListener("click", () => {
+    const e = b.entries[btn.dataset.i];
+    e.again = e.checked = true; b.confirm = false; redrawRows();
+  }));
+}
+function redrawRows() {
+  const list = $("list"), top = list.scrollTop;
+  list.innerHTML = S.batch.entries.map(batchRow).join("");
+  list.scrollTop = top;
+  bindRows(); updatePicked();
+}
+
+// The count, the button, and (for very long lists) the "are you sure" step.
+function updatePicked() {
+  const b = S.batch, n = picked().length, all = n === b.entries.length, hours = picked().reduce((t, e) => t + e.duration, 0) / 3600;
+  $("pickedCount").textContent = `${n} of ${b.entries.length} selected`;
+  const box = $("batchAction");
+  if (b.confirm) {
+    box.innerHTML = `
+      <div class="card confirm">
+        <div class="result-title">Download ${n} videos?</div>
+        <div class="result-text">That's a lot${hours >= 1 ? `: about ${Math.round(hours)} hours of video` : ""}. It can take hours and fill up your disk. You can stop at any time, keep what's done, and paste the link again later to get the rest.</div>
+        <div class="result-actions"><button class="btn" id="confirmNo">Go back</button><button class="btn primary" id="confirmYes">Download ${n} videos</button></div>
+      </div>`;
+    $("confirmNo").addEventListener("click", () => { b.confirm = false; updatePicked(); });
+    $("confirmYes").addEventListener("click", startBatch);
+    return;
+  }
+  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? (b.entries.every(e => e.already) ? "All of these are already downloaded" : "Select videos to download") : all ? `Download all (${n})`
+    : b.entries.every(e => e.checked || e.already) ? `Download the rest (${n})` : `Download selected (${n})`}</button>`;
+  $("download").addEventListener("click", () => {
+    if (n >= BIG_BATCH) { b.confirm = true; return updatePicked(); }
+    startBatch();
+  });
+}
+
+async function startBatch() {
+  if (settings.saveTo !== "project" && !require("fs").existsSync(settings.saveTo)) {
+    setSaveTo("project"); render();
+    return toast("That folder isn't available anymore, so Pluck switched back to your project folder.");
+  }
+  const b = S.batch;
+  b.outDir = await batchFolder(b);
+  b.cancelled = false; b.stopAfter = false; b.confirm = false; b.startedAt = Date.now();
+  b.entries.forEach(e => { e.status = e.checked ? "waiting" : null; e.error = null; });
+  go("batchRun");
+  const todo = picked();
+  for (let i = 0; i < todo.length && !b.cancelled && !b.stopAfter; i++) {
+    const e = todo[i];
+    // Checked again here, not only when the list opened: a ticked video may already be in the folder (ticked back by
+    // hand, or the list was read before the folder could be). It isn't downloaded or imported a second time.
+    const names = finishedFiles(b.outDir);
+    if (!e.again && haveFile(names, e)) { e.status = "had"; continue; }
+    const copy = e.again ? names.filter(n => n.indexOf(`[${e.id}]`) !== -1).length + 1 : 0;
+    b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null, copy });
+    updateBatchRun();
+    const job = await new Promise(resolve => {
+      const t = setInterval(() => { updateBatchRun(); if (/done|error|cancelled/.test(e.job.status)) { clearInterval(t); resolve(e.job); } }, 400);
+    });
+    if (job.status === "cancelled") break;
+    if (job.status === "error") { e.status = "failed"; e.error = job.error.message; continue; }
+    e.status = "importing"; updateBatchRun();
+    try { await importIntoPremiere(job.file, folderName(b.title)); e.status = "done"; }
+    catch (err) { e.status = "failed"; e.error = err.message; }
+  }
+  todo.forEach(e => { if (e.status === "waiting" || e.status === "downloading") e.status = "skipped"; });
+  go("batchDone");
+}
+
+const ITEM_STATE = { waiting: "", downloading: "active", importing: "active", done: "done", failed: "failed", skipped: "", had: "done" };
+
+function vBatchRun() {
+  main.innerHTML = `
+    ${batchCard()}
+    <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+    <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
+    <div class="list run" id="list">
+      ${picked().map((e, i) => `
+        <div class="item step" id="it${i}">
+          <span class="dot"></span>
+          <span class="item-title" title="${esc(e.title)}">${esc(e.title)}<span class="item-err"></span></span>
+          <span class="item-len">${itemLength(e)}</span>
+        </div>`).join("")}
+    </div>
+    <div class="action two">
+      <button class="btn big" id="stopAfter">Stop after this video</button>
+      <button class="btn big" id="cancel">Cancel now</button>
+    </div>`;
+  // Stop after this video: the one downloading finishes and is imported, then nothing else starts.
+  $("stopAfter").addEventListener("click", () => {
+    S.batch.stopAfter = true;
+    $("stopAfter").disabled = true; $("stopAfter").textContent = "Stopping after this one…";
+  });
+  $("cancel").addEventListener("click", () => {
+    S.batch.cancelled = true;
+    picked().forEach(e => { if (e.job && e.status === "downloading") engine.cancel(e.job); });
+    $("cancel").disabled = $("stopAfter").disabled = true; $("cancel").textContent = "Stopping…";
+  });
+  updateBatchRun();
+}
+
+function updateBatchRun() {
+  if (S.view !== "batchRun") return;
+  const todo = picked(), n = todo.length, i = S.batch.current, e = todo[i];
+  todo.forEach((x, k) => {
+    const el = $("it" + k); if (!el) return;
+    el.className = "item step " + ITEM_STATE[x.status];
+    el.querySelector(".item-err").textContent = x.error ? " · " + x.error : x.status === "had" ? " · already downloaded" : "";
+  });
+  if (!e) return;
+  // Overall bar: finished videos plus how far the current one has got.
+  const pct = e.status === "importing" ? 100 : (e.job && e.job.percent) || 0;
+  $("barFill").style.width = ((i + pct / 100) / n) * 100 + "%";
+  $("barLabel").textContent = `${i + 1} of ${n} · ${e.status === "importing" ? "Importing…"
+    : e.job && e.job.status === "processing" ? "Finishing up…" : pct ? `Downloading · ${pct}%` : "Getting ready…"}`;
+  // Time left: once one video is finished, assume the rest go at the same pace as the batch so far.
+  const progress = i + pct / 100, left = i >= 1 ? (Date.now() - S.batch.startedAt) / 1000 / progress * (n - progress) : 0;
+  $("barRight").textContent = left ? `${fmtLeft(left)} left` : e.status === "downloading" && e.job ? e.job.speed || "" : "";
+  if (S.batch.current !== S.batch.shown) { S.batch.shown = S.batch.current; const el = $("it" + i); if (el) el.scrollIntoView({ block: "nearest" }); }
+}
+
+function vBatchDone() {
+  const b = S.batch, had = picked().filter(e => e.status === "had").length;
+  const todo = picked().filter(e => e.status !== "had"), done = todo.filter(e => e.status === "done").length;
+  const failed = todo.filter(e => e.status === "failed"), skipped = todo.filter(e => e.status === "skipped").length;
+  const title = !todo.length ? "Nothing new to add" : skipped ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
+  main.innerHTML = `
+    <div class="card result ${done || !todo.length ? "ok" : "bad"}">
+      <div class="result-icon">${done || !todo.length ? "✓" : "!"}</div>
+      <div class="result-title">${esc(title)}</div>
+      <div class="result-text">${done ? `Find them in the “${esc(batchBin())}” bin.` : "Nothing was added to your project."}
+        ${had ? ` ${had === 1 ? "1 video was" : had + " videos were"} already downloaded, so ${had === 1 ? "it wasn't" : "they weren't"} added again.` : ""}
+        ${skipped ? ` ${skipped} not downloaded yet. Paste the same link again to get them: Pluck skips the ones you already have.` : ""}</div>
+      ${failed.length ? `<div class="fails">${failed.map(e => `<div><b>${esc(e.title)}</b><br>${esc(e.error)}</div>`).join("")}</div>` : ""}
+      <div class="file">${esc(b.outDir)}</div>
+      <div class="result-actions"><button class="btn primary" id="again">Download another link</button></div>
+    </div>`;
+  $("again").addEventListener("click", () => go("empty", { url: "", info: null, batch: null }));
 }
 
 /* ---------------- Settings sheet ---------------- */
@@ -508,7 +836,7 @@ async function openSettings() {
 
 function initSettings() {
   $("openSettings").addEventListener("click", openSettings);
-  $("closeSettings").addEventListener("click", () => { $("settings").classList.add("hidden"); if (S.view === "ready") render(); });
+  $("closeSettings").addEventListener("click", () => { $("settings").classList.add("hidden"); if (S.view === "ready" || S.view === "batch") render(); });
 
   const bin = $("setBin");
   bin.value = settings.bin;

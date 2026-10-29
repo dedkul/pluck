@@ -64,7 +64,9 @@ a:hover { text-decoration: underline; }
 .input-wrap { flex: 1; position: relative; display: flex; min-width: 0; }
 .input-wrap .input { flex: 1; padding-right: 28px; }
 .clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; border: 0; border-radius: 50%;
-  background: var(--bg-3); color: var(--muted); font-size: 14px; line-height: 22px; padding: 0; }
+  background: var(--bg-3); color: var(--muted); padding: 0; display: flex; align-items: center; justify-content: center; }
+/* An SVG cross, not the "×" letter: the letter sits on the text baseline, so it never looks centred in the circle. */
+.clear svg { display: block; }
 .clear:hover { background: rgba(255, 255, 255, 0.2); color: var(--text); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 /* Banner: a new version is out */
@@ -119,6 +121,7 @@ a:hover { text-decoration: underline; }
 .binname { padding: 7px 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .action { margin-top: 18px; }
 .action .sub { margin-top: 6px; text-align: center; }
+.action.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 /* Progress */
 .bar { height: 6px; background: #3a3a3a; border-radius: 3px; overflow: hidden; margin-top: 16px; }
@@ -133,6 +136,28 @@ a:hover { text-decoration: underline; }
 .step.done .dot { background: var(--ok); border-color: var(--ok); }
 .step.done .dot::after { content: "✓"; color: #fff; font-size: 9px; font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Playlist / folder list */
+.list-head { display: flex; align-items: center; gap: 6px; margin-top: 14px; }
+.list-head .label { margin: 0; }
+.list { margin-top: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(0, 0, 0, 0.15); }
+.item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.item:last-child { border-bottom: 0; }
+.item:hover { background: var(--bg-2); }
+.item input { margin: 0; flex: none; accent-color: var(--accent-2); }
+.item-n { color: var(--dim); font-size: 10px; min-width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+.item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-len { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+.item-err { color: var(--err); }
+.list.run { margin-top: 14px; }
+.list.run .item { cursor: default; }
+.list.run .item:hover { background: none; }
+.step.failed { color: var(--muted); }
+.step.failed .dot { background: var(--err); border-color: var(--err); }
+.step.failed .dot::after { content: "!"; color: #fff; font-size: 9px; font-weight: 700; }
+.confirm { padding: 14px; text-align: center; }
+.fails { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left; color: var(--muted); font-size: 11px; }
+.fails b { color: var(--text); font-weight: 600; }
 
 /* Result */
 .result { padding: 18px 14px; text-align: center; }
@@ -163,3 +188,9 @@ a:hover { text-decoration: underline; }
   transition: all 0.2s; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); }
 .toast.on { transform: translate(-50%, 0); opacity: 1; }
 #saveToPath { word-break: break-all; }
+.item.had { cursor: default; }
+.item.had:hover { background: none; }
+.item.had .item-title { color: var(--muted); }
+.had-mark { flex: none; width: 13px; height: 13px; border-radius: 50%; background: var(--ok); color: #fff; font-size: 9px; font-weight: 700; display: grid; place-items: center; }
+.item .btn.again { flex: none; padding: 2px 8px; font-size: 10px; }
+.again-tag { flex: none; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; font-size: 10px; line-height: 16px; font-weight: 600; }
