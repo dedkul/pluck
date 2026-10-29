@@ -146,7 +146,7 @@ function pasteRow(error, hint) {
     <div class="field">
       <div class="input-wrap">
         <input class="input ${error ? "bad" : ""}" id="url" placeholder="Paste a YouTube, X or Instagram link" value="${esc(S.url)}" spellcheck="false">
-        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link">×</button>
+        <button class="clear ${S.url ? "" : "hidden"}" id="clear" title="Clear link" aria-label="Clear link"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
       <button class="btn primary ${S.url ? "hidden" : ""}" id="paste">Paste link</button>
     </div>
@@ -193,7 +193,7 @@ async function lookup(raw) {
       if (S.view !== "loading" || S.url !== url) return;
       return go("batch", { info: null, batch });
     }
-    go("ready", Object.assign({ info }, clipDefaults(info)));
+    go("ready", Object.assign({ info, quality: settings.quality }, clipDefaults(info)));
   } catch (e) {
     if (S.view !== "loading") return;
     go("error", { error: e });
@@ -252,6 +252,23 @@ function clipSection() {
 }
 
 // One place that keeps the slider, the time fields, the length and the button text in step.
+// How long converting will add, from our test on an M4 Pro Mac (DESIGN_LOG Entry 18): 4K takes about half the
+// video's length at 24-30 fps and about 0.9x at 60 fps. Slower computers take longer, hence "roughly".
+function convertGuess() {
+  const h = parseInt(S.quality, 10), fit = (S.info.sizes || []).filter(f => f.height <= h);
+  const fps = Math.max(0, ...fit.map(f => f.fps));
+  const s = (S.mode === "clip" ? S.end - S.start : S.info.duration) * (fps > 30 ? 0.9 : 0.5);
+  return s < 60 ? "under a minute" : `${Math.round(s / 60)} min`;
+}
+
+// "about 2 min left", from how fast the percentage has been climbing in this step.
+function timeLeft(step, pct) {
+  if (S.step !== step) Object.assign(S, { step, stepAt: Date.now() });
+  if (pct < 3) return "";
+  const s = ((Date.now() - S.stepAt) / 1000) * (100 - pct) / pct;
+  return s < 60 ? `about ${Math.max(5, Math.round(s / 5) * 5)} s left` : `about ${Math.round(s / 60)} min left`;
+}
+
 function updateClip() {
   const clip = S.mode === "clip";
   if ($("fill")) {
@@ -262,7 +279,10 @@ function updateClip() {
     if (document.activeElement !== $("tB")) $("tB").value = fmt(S.end);
     $("len").textContent = fmt(S.end - S.start);
   }
-  const audio = S.quality === "audio";
+  const audio = S.quality === "audio" || S.quality === "wav";
+  $("qualityHint").textContent = engine.needsConversion(S.quality)
+    ? `Takes longer: Premiere can't open 1440p or 4K the way sites send it, so Pluck converts it. Roughly ${convertGuess()} extra for this ${clip ? "clip" : "video"}.`
+    : "";
   $("download").textContent = clip
     ? `Download ${audio ? "audio clip" : "clip"} (${fmt(S.end - S.start)})`
     : audio ? "Download audio" : "Download video";
@@ -340,8 +360,31 @@ function bindClip() {
   }));
 }
 
+// Only offer sizes this video actually has, labelled with the real size and its frame rate when above 30 fps.
+// Each choice covers the sizes down to the next one (a 1600-pixel-tall film shows as "1600p" under the 4K choice).
+// Sites that don't list sizes get the usual 1080p / 720p / 480p.
+function qualityItems(info) {
+  const sizes = info.sizes || [], tops = [2160, 1440, 1080, 720, 480];
+  let video = tops.map((h, i) => {
+    const fit = sizes.filter(f => f.height <= h && f.height > (tops[i + 1] || 0));
+    if (!fit.length) return null;
+    const best = Math.max(...fit.map(f => f.height)), fps = Math.max(...fit.filter(f => f.height === best).map(f => f.fps));
+    return [h + "p", (best === 2160 ? "4K" : best + "p") + (fps > 30 ? ` · ${fps} fps` : "")];
+  }).filter(Boolean);
+  if (!video.length) video = [["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]];
+  video[0][1] += " (best)";
+  // Audio is offered as the site sends it: asking for a higher bitrate than the source can't add quality.
+  const kbps = info.audioKbps ? ` · ${info.audioKbps} kbps` : "";
+  return video.concat([["audio", `Audio only (M4A${kbps})`], ["wav", "Audio only (WAV, uncompressed)"]]);
+}
+
 function vReady() {
-  const items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
+  const items = qualityItems(S.info);
+  // The default from Settings may be bigger than this video goes; fall back to the best it has.
+  if (!items.some(([v]) => v === S.quality)) {
+    const smaller = items.find(([v]) => parseInt(v, 10) <= parseInt(S.quality, 10));
+    S.quality = (smaller || items[0])[0];
+  }
   main.innerHTML = `
     ${pasteRow()}
     <div style="margin-top:12px">${videoCard()}</div>
@@ -353,6 +396,7 @@ function vReady() {
         <select class="input full" id="quality">
           ${items.map(([v, l]) => `<option value="${v}" ${v === S.quality ? "selected" : ""}>${l}</option>`).join("")}
         </select>
+        <div class="sub" id="qualityHint" style="margin-top:5px"></div>
       </div>
       <div>
         <div class="label">Import to bin</div>
@@ -425,19 +469,22 @@ async function startDownload() {
   const outDir = await downloadFolder();
   const clip = S.mode === "clip" ? { start: S.start, end: S.end } : null;
   const job = engine.download({ url: S.info.url, quality: S.quality, outDir, clip });
-  S.startedAt = Date.now();
+  S.startedAt = Date.now(); S.step = null;
   go("downloading", { job });
   S.poll = setInterval(pollJob, 400);
 }
 
 function vDownloading() {
+  // A full 1440p/4K video gets its own "Converting" step; a clip is converted while it downloads.
+  const converts = engine.needsConversion(S.quality) && S.mode !== "clip";
   main.innerHTML = `
     ${videoCard()}
     <div class="bar ${S.mode === "clip" ? "hidden" : ""}"><div class="bar-fill" id="barFill"></div></div>
     <div class="bar-meta"><span id="barLabel">Getting ready…</span><span id="barRight"></span></div>
     <div class="steps">
-      <div class="step" id="st0"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
-      <div class="step" id="st1"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
+      <div class="step"><span class="dot"></span>${S.mode === "clip" ? `Downloading ${fmt(S.start)} – ${fmt(S.end)}` : "Downloading"}</div>
+      ${converts ? `<div class="step"><span class="dot"></span>Converting for Premiere</div>` : ""}
+      <div class="step"><span class="dot"></span>Importing into “${esc(settings.bin)}”</div>
     </div>
     <div class="action"><button class="btn big full" id="cancel">Cancel</button></div>`;
   setStep(0);
@@ -445,7 +492,7 @@ function vDownloading() {
 }
 
 function setStep(n) {
-  [0, 1].forEach(i => { const el = $("st" + i); if (el) el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
+  document.querySelectorAll(".step").forEach((el, i) => { el.className = "step" + (i < n ? " done" : i === n ? " active" : ""); });
 }
 
 let importing = false;
@@ -453,20 +500,29 @@ async function pollJob() {
   const job = S.job;
   if (S.view !== "downloading" || importing) return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
-  // yt-dlp can't report a percentage while cutting a clip, so show time spent instead of a bar that never moves.
+  const half = engine.needsConversion(S.quality) ? 0.45 : 0.9; // converting videos: download fills the first half
+  // A clip's percentage comes from ffmpeg's progress report, which starts a few seconds in.
   if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
-    label.textContent = `Cutting your clip · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
-  } else if (job.status === "downloading") {
+    const what = engine.needsConversion(S.quality) ? "Downloading and converting your clip" : "Cutting your clip";
+    fill.parentNode.classList.toggle("hidden", !job.percent);
     fill.style.width = job.percent * 0.9 + "%";
+    label.textContent = job.percent ? `${what} · ${job.percent}%` : `${what}…`;
+    right.textContent = timeLeft("clip", job.percent);
+  } else if (job.status === "downloading") {
+    fill.style.width = job.percent * half + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
-    right.textContent = job.speed || "";
+    right.textContent = [job.speed, timeLeft("download", job.percent)].filter(Boolean).join(" · ");
   } else if (job.status === "processing") {
-    fill.style.width = "90%"; label.textContent = "Finishing up…"; right.textContent = "";
+    fill.style.width = half * 100 + "%"; label.textContent = "Finishing up…"; right.textContent = "";
+  } else if (job.status === "converting") {
+    setStep(1);
+    fill.style.width = 45 + job.percent * 0.45 + "%"; label.textContent = `Converting for Premiere · ${job.percent}%`;
+    right.textContent = timeLeft("convert", job.percent);
   } else if (job.status === "error") {
     go("error", { error: job.error });
   } else if (job.status === "done") {
     clearInterval(S.poll);
-    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(1);
+    fill.style.width = "95%"; label.textContent = "Importing…"; right.textContent = ""; setStep(document.querySelectorAll(".step").length - 1);
     importing = true;
     try {
       await importIntoPremiere(job.file);
@@ -556,7 +612,9 @@ function batchCard() {
 function itemLength(e) { return e.duration ? fmt(e.duration) : e.size ? mb(e.size) : ""; }
 
 function vBatch() {
-  const b = S.batch, items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only"]];
+  // Sizes differ from video to video in a list, so it keeps the sizes every site sends ready for Premiere.
+  const b = S.batch, items = [["1080p", "1080p (best)"], ["720p", "720p"], ["480p", "480p"], ["audio", "Audio only (M4A)"], ["wav", "Audio only (WAV)"]];
+  if (!items.some(([v]) => v === S.quality)) S.quality = "1080p"; // a 4K default would quietly convert every video
   main.innerHTML = `
     ${pasteRow()}
     <div style="margin-top:12px">${batchCard()}</div>
