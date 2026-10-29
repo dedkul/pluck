@@ -522,13 +522,14 @@ async function batchFolder(b) {
 
 // Picking up where you left off: videos already in this playlist's folder (from an earlier, stopped run) start
 // unticked. File names end in "[video id]", which is how they're recognised. Half-finished pieces don't count.
+function finishedFiles(folder) {
+  try { return require("fs").readdirSync(folder).filter(n => !/\.(part|ytdl)$|\.f\d+\.\w+$|\.part-Frag\d+$/.test(n)); }
+  catch (e) { return []; } // no folder yet: nothing done
+}
+const haveFile = (names, e) => e.id && names.some(n => n.indexOf(`[${e.id}]`) !== -1);
 async function markDownloaded(b) {
-  let names = [];
-  try { names = require("fs").readdirSync(await batchFolder(b)); } catch (e) { return; } // no folder yet: nothing done
-  names = names.filter(n => !/\.(part|ytdl)$|\.f\d+\.\w+$|\.part-Frag\d+$/.test(n));
-  b.entries.forEach(e => {
-    if (e.id && names.some(n => n.indexOf(`[${e.id}]`) !== -1)) { e.already = true; e.checked = false; }
-  });
+  const names = finishedFiles(await batchFolder(b));
+  b.entries.forEach(e => { if (haveFile(names, e)) { e.already = true; e.checked = false; } });
 }
 
 // 1500 s -> "about 25 min". Only a rough guess, so no seconds.
@@ -644,6 +645,9 @@ async function startBatch() {
   const todo = picked();
   for (let i = 0; i < todo.length && !b.cancelled && !b.stopAfter; i++) {
     const e = todo[i];
+    // Checked again here, not only when the list opened: a ticked video may already be in the folder (ticked back by
+    // hand, or the list was read before the folder could be). It isn't downloaded or imported a second time.
+    if (haveFile(finishedFiles(b.outDir), e)) { e.status = "had"; continue; }
     b.current = i; e.status = "downloading"; e.job = engine.download({ url: e.url, quality: S.quality, outDir: b.outDir, clip: null });
     updateBatchRun();
     const job = await new Promise(resolve => {
@@ -659,7 +663,7 @@ async function startBatch() {
   go("batchDone");
 }
 
-const ITEM_STATE = { waiting: "", downloading: "active", importing: "active", done: "done", failed: "failed", skipped: "" };
+const ITEM_STATE = { waiting: "", downloading: "active", importing: "active", done: "done", failed: "failed", skipped: "", had: "done" };
 
 function vBatchRun() {
   main.innerHTML = `
@@ -697,7 +701,7 @@ function updateBatchRun() {
   todo.forEach((x, k) => {
     const el = $("it" + k); if (!el) return;
     el.className = "item step " + ITEM_STATE[x.status];
-    el.querySelector(".item-err").textContent = x.error ? " · " + x.error : "";
+    el.querySelector(".item-err").textContent = x.error ? " · " + x.error : x.status === "had" ? " · already downloaded" : "";
   });
   if (!e) return;
   // Overall bar: finished videos plus how far the current one has got.
@@ -712,14 +716,16 @@ function updateBatchRun() {
 }
 
 function vBatchDone() {
-  const b = S.batch, todo = picked(), done = todo.filter(e => e.status === "done").length;
+  const b = S.batch, had = picked().filter(e => e.status === "had").length;
+  const todo = picked().filter(e => e.status !== "had"), done = todo.filter(e => e.status === "done").length;
   const failed = todo.filter(e => e.status === "failed"), skipped = todo.filter(e => e.status === "skipped").length;
-  const title = skipped ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
+  const title = !todo.length ? "Nothing new to add" : skipped ? `Stopped · ${done} of ${todo.length} added` : done === todo.length ? `Added all ${done} videos` : `Added ${done} of ${todo.length} videos`;
   main.innerHTML = `
-    <div class="card result ${done ? "ok" : "bad"}">
-      <div class="result-icon">${done ? "✓" : "!"}</div>
+    <div class="card result ${done || !todo.length ? "ok" : "bad"}">
+      <div class="result-icon">${done || !todo.length ? "✓" : "!"}</div>
       <div class="result-title">${esc(title)}</div>
       <div class="result-text">${done ? `Find them in the “${esc(batchBin())}” bin.` : "Nothing was added to your project."}
+        ${had ? ` ${had === 1 ? "1 video was" : had + " videos were"} already downloaded, so ${had === 1 ? "it wasn't" : "they weren't"} added again.` : ""}
         ${skipped ? ` ${skipped} not downloaded yet. Paste the same link again to get them: Pluck skips the ones you already have.` : ""}</div>
       ${failed.length ? `<div class="fails">${failed.map(e => `<div><b>${esc(e.title)}</b><br>${esc(e.error)}</div>`).join("")}</div>` : ""}
       <div class="file">${esc(b.outDir)}</div>
