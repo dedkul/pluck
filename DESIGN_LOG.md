@@ -235,17 +235,39 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 
 ---
 
-## Roadmap (reordered after Entry 7)
+## Roadmap (updated after Entry 17)
 
-| Version | What ships |
+**Done so far**
+
+| Version | What shipped |
 |---|---|
 | **v0.0** | HTML design prototype (`prototype/index.html`). No real downloading. |
 | **v0.1** | Paste a YouTube link → download → auto-import into a "Web Downloads" bin. Mac. |
-| **v0.2** | Trim: range slider + timestamp boxes. Measure speed and audio sync. |
-| **v0.3** | Switch to CEP with yt-dlp + ffmpeg built in: nothing extra to install. Premiere 2022+. |
-| **v0.4** | Test X + Instagram, Windows; in-panel YouTube search, GIF search (GIPHY), download history |
-| **v1.0** | Signed one-click installer for Mac + Windows, native Apple Silicon ffmpeg, auto-update yt-dlp |
-| **By late 2028** | Rebuild as a UXP Hybrid plugin before CEP is switched off; transcript search to find a quote and clip it |
+| **v0.2** | Trim: range slider + timestamp boxes. |
+| **v0.3** | CEP panel with yt-dlp + ffmpeg built in: nothing extra to install. Premiere 2022+, Mac and Windows. One-click updates (v0.3.4). |
+
+**Next, in order.** Each step makes the next one easier, so the order matters more than the dates.
+
+| When | What | Why now |
+|---|---|---|
+| **v0.4** (now) | 4K / 1440p with conversion, honest quality menu, time-left indicator (Entry 17); whole playlists | The most-asked-for features, and they work in the framework we have. |
+| **v0.5** | Native Apple Silicon ffmpeg | Converting gets about 2× faster on M-series Macs (measured: 7.9 s vs 15.6 s). Directly shortens the 4K wait. |
+| **v0.6** | Keep yt-dlp up to date automatically | Sites change every few weeks and break downloads. Today the fix only arrives when we ship a new Pluck. This is the biggest "it stopped working" risk. |
+| **v1.0** | Signed installer for Mac and Windows; test X, Instagram and Windows properly | Without signing, macOS and Windows may block the bundled tools. Signing makes Pluck feel trustworthy to install. |
+| **2027** | Start the UXP Hybrid rebuild (details below) | It has to be finished and tested well before CEP switches off in Dec 2028. |
+| **Later** | In-panel YouTube search, GIF search, download history, transcript search (find a quote and clip it) | Nice to have. None of these get easier by doing them before the rebuild. Most would have to be rebuilt anyway. |
+
+**The long-term problem: Pluck's framework has an end date.** Pluck is a CEP panel. Adobe switches CEP off by default in Dec 2028 and removes it in Dec 2029. After that Pluck simply won't load. The replacement is UXP, but a plain UXP plugin isn't allowed to run outside programs like yt-dlp and ffmpeg, and Pluck can't work without them. The way through is a **UXP Hybrid** plugin: UXP for the panel, plus a small native helper (C++, built for Mac and Windows) that runs the tools (Entry 8).
+
+**Why this is less scary than it sounds**
+- **The engine moves over almost unchanged.** Downloading, converting, progress and error messages live in their own file (`lib/engine.js`) and don't touch the panel. That split was on purpose (Entry 8), and every feature since has kept it.
+- **The panel is plain HTML/CSS/JS,** which UXP also uses. The screens mostly carry over; what gets rewritten is the import into Premiere (ExtendScript → Premiere's UXP API) and the way the panel talks to the engine.
+- **The design work is done.** The flows, copy and decisions in this log stay the same. Only the plumbing changes.
+
+**What it costs**
+- **Older Premiere drops off:** UXP Hybrid needs Premiere 2025.6 or newer, so people on Premiere 2022–2024 stay on the last CEP version of Pluck. It will keep working for them until Adobe removes CEP.
+- **A C++ helper to build and sign** for two platforms. That's new skills for this project, and the main reason to start in 2027, not 2028.
+- **Rule until then:** new features go into `engine.js` where possible, not into panel-only code, so less has to be redone.
 
 ## Open risks
 
