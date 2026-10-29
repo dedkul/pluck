@@ -204,10 +204,30 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified yet:** anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
 - **Catch:** this only helps from the version that includes it. v0.3.3 went out without it, so anyone on v0.3.3 or older installs v0.3.4 by hand one last time.
 
-## Entry 17 — 4K, 1440p, 60 fps, WAV and "Original file"
+## Entry 17 — Whole playlists and Drive folders in one go
+*2026-10-28*
+
+- **Problem:** editors often get footage as a YouTube playlist or a shared Google Drive folder. Pluck only took one video at a time, so 12 videos meant pasting 12 links. Pasting a playlist link didn't even work: Pluck tried to look up every video in it first and gave up or got confused.
+- **Decision:** paste a playlist or folder link and Pluck shows a list of its videos, all ticked, with "Select all" / "Select none", one quality for everything and a "Download all (12)" button. No clip step: trimming 12 videos one by one belongs in Premiere.
+- **How it runs:** one video at a time, with "3 of 12" and one bar for the whole batch. Each video is imported as soon as it's done, so Cancel keeps everything finished so far. A video that fails (removed, private) is marked with the reason and skipped; the rest carry on. The end screen says how many were added and lists what failed and why.
+- **Where things go:** files in a folder named after the playlist, inside the usual save folder. In Premiere, a bin of the same name inside "Web Downloads". A whole playlist stays together and doesn't flood the main bin.
+- **Very long lists:** at 200 or more videos Pluck asks first ("That's a lot. It can take hours and fill up your disk."), so a mis-pasted channel-sized playlist doesn't quietly start an all-night download.
+- **What if it's going to take all night?** (the user asked this after the first version, rightly; I had only built "Cancel")
+  - **Time left:** once the first video is done, the panel shows "about 25 min left", based on how fast the batch has gone so far. The 200+ question also says how many hours of video that is.
+  - **Two ways to stop:** "Stop after this video" lets the current one finish and import cleanly; "Cancel now" stops straight away. Both keep everything already done.
+  - **Pick up later instead of pause:** paste the same link again and videos already in that playlist's folder show as "Already downloaded" and start unticked, so the button says "Download the rest (N)". Nothing is downloaded or imported twice. Half-finished pieces from a stopped download don't count as done.
+  - **Why not a real pause button:** a pause would have to survive closing Premiere to be useful. Pick-up-later does that for free, because what's done is simply the files in the folder.
+- **Why one at a time, not several at once:** it's simpler to follow, YouTube is less likely to slow us down, and a failure only affects one video.
+- **A link to one video inside a playlist** (`watch?v=…&list=…`) still means just that video, as before. A channel link is turned away with "open one playlist and copy its link", because a channel is many playlists.
+- **Google Drive surprise #1:** yt-dlp's own Drive-folder reader is broken (an open bug on their side). Pluck now reads the folder's page itself to get the file list, then hands each video to yt-dlp as a normal Drive file. Limits: Google's page lists only the first 50 files, and videos inside subfolders aren't included. Pluck says both.
+- **Google Drive surprise #2:** Drive videos were coming down as Google's small 360p preview (0.5 MB) rather than the file that was uploaded (1.7 MB). Pluck now always takes the original Drive file, so footage arrives at full quality. This also fixes single Drive file links.
+- **Verified on Mac:** real downloads from a public YouTube playlist (Blender's open movies, Creative Commons) and a public Drive folder of Pixabay clips, saved into the right folders; Drive files match the uploaded size exactly. The panel screens (select all/none, the 200+ question, a failing video being skipped, Cancel halfway) were clicked through in a browser with a stand-in for Premiere. A private folder, a folder with only subfolders, and a channel link each show a clear message.
+- **Not verified yet:** the import into the named sub-bin inside a real Premiere, and anything on Windows. Also: if you change "Save to" while looking at a playlist, the "Already downloaded" marks aren't re-checked until you paste the link again.
+
+## Entry 18 — 4K, 1440p, 60 fps and WAV
 
 - **Problem:** people asked why there's no 4K. Pluck only picks H.264 video, the kind Premiere opens straight away, and YouTube only sends H.264 up to 1080p. Anything bigger comes as VP9 or AV1, which Premiere can't open. The menu also listed 1080p even for a 720p video.
-- **Decision:** 1440p and 4K download the best video at that size, then Pluck converts it to H.264 MP4 with its built-in ffmpeg. The menu now lists only the sizes the video really has, with the frame rate when it's above 30 fps (e.g. "4K · 60 fps"). Also new: "Audio only (WAV)" next to M4A, and "Original file (no conversion)" for people who want exactly what the site sends.
+- **Decision:** 1440p and 4K download the best video at that size, then Pluck converts it to H.264 MP4 with its built-in ffmpeg. The menu now lists only the sizes the video really has, with the frame rate when it's above 30 fps (e.g. "4K · 60 fps"). Also new: "Audio only (WAV)" next to M4A.
 - **Which format to convert to? Measured, not guessed.** A 30-second piece of *Sound Asleep* (a Creative Commons 4K film, VP9, 24 fps), converted on an M4 Pro Mac. Pluck's Mac ffmpeg is an Intel build running through Rosetta, so an Apple Silicon build would be faster:
 
   | Converted to | Time for 30 s of 4K | File size |
@@ -228,14 +248,15 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Audio quality:** the M4A option shows the real bitrate the site sends (e.g. "M4A · 130 kbps"). We didn't add "192 / 320 kbps" choices, because YouTube's best audio is about 130–160 kbps and converting to a bigger number only makes a bigger file, not better sound. WAV is there for editing: uncompressed, nothing lost again.
 - **Apple Silicon would make converting twice as fast:** the same 30 s 4K test took 15.6 s with Pluck's Intel ffmpeg (through Rosetta) and 7.9 s with a native Apple Silicon ffmpeg on the same Mac. yt-dlp is already native. Switching the bundled Mac ffmpeg is the next step (it's on the v1.0 list).
 - **HDR:** Pluck prefers the normal (SDR) version, because HDR squeezed into an ordinary H.264 file looks washed out.
-- **"Original file" clips** start at the nearest keyframe, a few seconds before the chosen start (4.6 s in our test), because cutting exactly would mean re-encoding. The menu says so.
-- **Verified on Mac** with real downloads, checked with ffprobe: 4K 60 fps clip → H.264 3840×2160 at 60 fps + AAC; 1080p 60 fps clip → H.264 1080p60; 1440p full video → converted to H.264, original deleted; WAV clip → PCM WAV; M4A → AAC; Original clip → VP9 WebM, unchanged. A full 3-minute 4K 60 fps video: 180 s to download, 165 s to convert (the percentage counted up steadily), and the result is H.264 3840×2160 at 60 fps, 944 MB (detailed nature footage at 60 fps is about 300 MB a minute). Cancelling halfway through converting left the folder empty.
-- **Not verified yet:** importing these files inside Premiere, and anything on Windows. Windows has no hardware encoder in the plan, so it relies on software H.264 there too.
+- **"Original file" tried and removed:** we briefly offered the file exactly as the site sends it (no conversion). Tested inside Premiere: a 4K WebM gave "File format not supported", while the converted 4K file imported fine. A choice that fails in Premiere breaks Pluck's whole promise, so it's gone. (One gap left: on a site with no H.264 at all, 1080p and below could still come as another format. YouTube always has H.264 up to 1080p.)
+- **Playlists keep 1080p and below** (plus M4A and WAV): videos in a list come in different sizes, and a 4K default would quietly turn a 20-video playlist into a very long conversion.
+- **Verified on Mac** with real downloads, checked with ffprobe: 4K 60 fps clip → H.264 3840×2160 at 60 fps + AAC; 1080p 60 fps clip → H.264 1080p60; 1440p full video → converted to H.264, original deleted; WAV clip → PCM WAV; M4A → AAC. A full 3-minute 4K 60 fps video: 180 s to download, 165 s to convert (the percentage counted up steadily), and the result is H.264 3840×2160 at 60 fps, 944 MB (detailed nature footage at 60 fps is about 300 MB a minute). Cancelling halfway through converting left the folder empty.
+- **Verified inside Premiere:** a 4K download of a trailer converted and imported fine. **Not verified yet:** anything on Windows. Windows has no hardware encoder in the plan, so it relies on software H.264 there too.
 
 
 ---
 
-## Roadmap (updated after Entry 17)
+## Roadmap (updated after Entry 18)
 
 **Done so far**
 
@@ -250,7 +271,7 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 
 | When | What | Why now |
 |---|---|---|
-| **v0.4** (now) | 4K / 1440p with conversion, honest quality menu, time-left indicator (Entry 17); whole playlists | The most-asked-for features, and they work in the framework we have. |
+| **v0.4** (now) | 4K / 1440p with conversion, honest quality menu, time-left indicator (Entry 18); whole playlists | The most-asked-for features, and they work in the framework we have. |
 | **v0.5** | Native Apple Silicon ffmpeg | Converting gets about 2× faster on M-series Macs (measured: 7.9 s vs 15.6 s). Directly shortens the 4K wait. |
 | **v0.6** | Keep yt-dlp up to date automatically | Sites change every few weeks and break downloads. Today the fix only arrives when we ship a new Pluck. This is the biggest "it stopped working" risk. |
 | **v1.0** | Signed installer for Mac and Windows; test X, Instagram and Windows properly | Without signing, macOS and Windows may block the bundled tools. Signing makes Pluck feel trustworthy to install. |
