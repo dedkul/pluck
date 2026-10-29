@@ -133,7 +133,10 @@ function createEngine(extensionRoot) {
           (j.formats || [j]).forEach(f => {
             if (f.height && f.vcodec !== "none") sizes[f.height] = Math.max(sizes[f.height] || 0, Math.round(f.fps || 0));
           });
+          // The best audio "Audio only (M4A)" will get, so the menu can show it.
+          const m4a = (j.formats || []).filter(f => f.vcodec === "none" && f.ext === "m4a" && f.abr).map(f => f.abr);
           resolve({
+            audioKbps: m4a.length ? Math.round(Math.max(...m4a)) : 0,
             sizes: Object.keys(sizes).map(h => ({ height: Number(h), fps: sizes[h] })),
             title: j.title, uploader: j.uploader || j.channel || j.uploader_id || "",
             duration: j.duration || 0, thumbnail: j.thumbnail || null,

@@ -242,6 +242,23 @@ function clipSection() {
 }
 
 // One place that keeps the slider, the time fields, the length and the button text in step.
+// How long converting will add, from our test on an M4 Pro Mac (DESIGN_LOG Entry 17): 4K takes about half the
+// video's length at 24-30 fps and about 0.9x at 60 fps. Slower computers take longer, hence "roughly".
+function convertGuess() {
+  const h = parseInt(S.quality, 10), fit = (S.info.sizes || []).filter(f => f.height <= h);
+  const fps = Math.max(0, ...fit.map(f => f.fps));
+  const s = (S.mode === "clip" ? S.end - S.start : S.info.duration) * (fps > 30 ? 0.9 : 0.5);
+  return s < 60 ? "under a minute" : `${Math.round(s / 60)} min`;
+}
+
+// "about 2 min left", from how fast the percentage has been climbing in this step.
+function timeLeft(step, pct) {
+  if (S.step !== step) Object.assign(S, { step, stepAt: Date.now() });
+  if (pct < 3) return "";
+  const s = ((Date.now() - S.stepAt) / 1000) * (100 - pct) / pct;
+  return s < 60 ? `about ${Math.max(5, Math.round(s / 5) * 5)} s left` : `about ${Math.round(s / 60)} min left`;
+}
+
 function updateClip() {
   const clip = S.mode === "clip";
   if ($("fill")) {
@@ -254,7 +271,7 @@ function updateClip() {
   }
   const audio = S.quality === "audio" || S.quality === "wav";
   $("qualityHint").textContent = engine.needsConversion(S.quality)
-    ? "Takes longer: sites send 1440p and 4K in a format Premiere can't open, so Pluck converts it after downloading."
+    ? `Takes longer: Premiere can't open 1440p or 4K the way sites send it, so Pluck converts it. Roughly ${convertGuess()} extra for this ${clip ? "clip" : "video"}.`
     : S.quality === "original" ? "Saves the file exactly as the site sends it (often WebM). Premiere may not open it, and clips start a few seconds early." : "";
   $("download").textContent = clip
     ? `Download ${audio ? "audio clip" : "clip"} (${fmt(S.end - S.start)})`
@@ -346,7 +363,9 @@ function qualityItems(info) {
   }).filter(Boolean);
   if (!video.length) video = [["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]];
   video[0][1] += " (best)";
-  return video.concat([["audio", "Audio only (M4A)"], ["wav", "Audio only (WAV)"], ["original", "Original file (no conversion)"]]);
+  // Audio is offered as the site sends it: asking for a higher bitrate than the source can't add quality.
+  const kbps = info.audioKbps ? ` · ${info.audioKbps} kbps` : "";
+  return video.concat([["audio", `Audio only (M4A${kbps})`], ["wav", "Audio only (WAV, uncompressed)"], ["original", "Original file (no conversion)"]]);
 }
 
 function vReady() {
@@ -439,7 +458,7 @@ async function startDownload() {
   const outDir = await downloadFolder();
   const clip = S.mode === "clip" ? { start: S.start, end: S.end } : null;
   const job = engine.download({ url: S.info.url, quality: S.quality, outDir, clip });
-  S.startedAt = Date.now();
+  S.startedAt = Date.now(); S.step = null;
   go("downloading", { job });
   S.poll = setInterval(pollJob, 400);
 }
@@ -471,21 +490,23 @@ async function pollJob() {
   if (S.view !== "downloading" || importing) return;
   const fill = $("barFill"), label = $("barLabel"), right = $("barRight");
   const half = engine.needsConversion(S.quality) ? 0.45 : 0.9; // converting videos: download fills the first half
-  // A clip's percentage comes from ffmpeg's progress; until the first report, show time spent.
+  // A clip's percentage comes from ffmpeg's progress report, which starts a few seconds in.
   if (S.mode === "clip" && (job.status === "downloading" || job.status === "processing")) {
     const what = engine.needsConversion(S.quality) ? "Downloading and converting your clip" : "Cutting your clip";
     fill.parentNode.classList.toggle("hidden", !job.percent);
     fill.style.width = job.percent * 0.9 + "%";
-    label.textContent = job.percent ? `${what} · ${job.percent}%` : `${what} · ${Math.round((Date.now() - S.startedAt) / 1000)}s`;
+    label.textContent = job.percent ? `${what} · ${job.percent}%` : `${what}…`;
+    right.textContent = timeLeft("clip", job.percent);
   } else if (job.status === "downloading") {
     fill.style.width = job.percent * half + "%";
     label.textContent = job.percent > 0 ? `Downloading · ${job.percent}%` : "Getting ready…";
-    right.textContent = job.speed || "";
+    right.textContent = [job.speed, timeLeft("download", job.percent)].filter(Boolean).join(" · ");
   } else if (job.status === "processing") {
     fill.style.width = half * 100 + "%"; label.textContent = "Finishing up…"; right.textContent = "";
   } else if (job.status === "converting") {
     setStep(1);
-    fill.style.width = 45 + job.percent * 0.45 + "%"; label.textContent = `Converting for Premiere · ${job.percent}%`; right.textContent = "";
+    fill.style.width = 45 + job.percent * 0.45 + "%"; label.textContent = `Converting for Premiere · ${job.percent}%`;
+    right.textContent = timeLeft("convert", job.percent);
   } else if (job.status === "error") {
     go("error", { error: job.error });
   } else if (job.status === "done") {
