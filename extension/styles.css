@@ -186,3 +186,8 @@ a:hover { text-decoration: underline; }
   transition: all 0.2s; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); }
 .toast.on { transform: translate(-50%, 0); opacity: 1; }
 #saveToPath { word-break: break-all; }
+.item.had { cursor: default; }
+.item.had:hover { background: none; }
+.item.had .item-title { color: var(--muted); }
+.had-mark { flex: none; width: 13px; height: 13px; border-radius: 50%; background: var(--ok); color: #fff; font-size: 9px; font-weight: 700; display: grid; place-items: center; }
+.had-tag { flex: none; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0 7px; font-size: 10px; line-height: 16px; font-weight: 600; }

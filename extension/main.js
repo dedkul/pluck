@@ -567,15 +567,21 @@ function vBatch() {
       <button class="btn small" id="pickNone">Select none</button>
     </div>
     <div class="list" id="list">
-      ${b.entries.map((e, i) => `
+      ${b.entries.map((e, i) => e.already ? `
+        <div class="item had" title="Already in this playlist's folder">
+          <span class="had-mark">✓</span>
+          <span class="item-n">${i + 1}</span>
+          <span class="item-title">${esc(e.title)}</span>
+          <span class="had-tag">Downloaded</span>
+        </div>` : `
         <label class="item">
           <input type="checkbox" data-i="${i}" ${e.checked ? "checked" : ""}>
           <span class="item-n">${i + 1}</span>
           <span class="item-title" title="${esc(e.title)}">${esc(e.title)}</span>
-          <span class="item-len">${e.already ? "Already downloaded" : itemLength(e)}</span>
+          <span class="item-len">${itemLength(e)}</span>
         </label>`).join("")}
     </div>
-    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already in this playlist's folder, so they're unticked.</div>` : ""}
+    ${b.entries.some(e => e.already) ? `<div class="hint">${b.entries.filter(e => e.already).length} already downloaded, so they're left out.</div>` : ""}
     ${b.platform === "Google Drive" ? `<div class="hint">Drive videos come as the original files, whatever the quality.${b.capped ? " Google only shows Pluck the first 50 files in a folder." : ""}</div>` : ""}
     <div class="divider"></div>
     <div class="opts">
@@ -602,7 +608,7 @@ function vBatch() {
   document.querySelectorAll("#list input").forEach(c => c.addEventListener("change", () => {
     b.entries[c.dataset.i].checked = c.checked; b.confirm = false; updatePicked();
   }));
-  const pickAll = on => { b.entries.forEach(e => { e.checked = on; }); document.querySelectorAll("#list input").forEach(c => { c.checked = on; }); b.confirm = false; updatePicked(); };
+  const pickAll = on => { b.entries.forEach(e => { e.checked = on && !e.already; }); document.querySelectorAll("#list input").forEach(c => { c.checked = on; }); b.confirm = false; updatePicked(); };
   $("pickAll").addEventListener("click", () => pickAll(true));
   $("pickNone").addEventListener("click", () => pickAll(false));
   updatePicked();
@@ -624,7 +630,7 @@ function updatePicked() {
     $("confirmYes").addEventListener("click", startBatch);
     return;
   }
-  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? "Select videos to download" : all ? `Download all (${n})`
+  box.innerHTML = `<button class="btn primary big full" id="download" ${n ? "" : "disabled"}>${!n ? (b.entries.every(e => e.already) ? "All of these are already downloaded" : "Select videos to download") : all ? `Download all (${n})`
     : b.entries.every(e => e.checked || e.already) ? `Download the rest (${n})` : `Download selected (${n})`}</button>`;
   $("download").addEventListener("click", () => {
     if (n >= BIG_BATCH) { b.confirm = true; return updatePicked(); }
