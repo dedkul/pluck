@@ -4,6 +4,6 @@ engine/bin/
 *.part
 *.ytdl
 CLAUDE.md
-extension/bin/
+extension/bin
 extension/.debug
 dist/

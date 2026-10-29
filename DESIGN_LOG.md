@@ -204,6 +204,26 @@ Goal: a friend on Windows can download Pluck from GitHub and test it without any
 - **Not verified yet:** anything on Windows (unpacking there uses PowerShell, and Windows may refuse to move a folder that's in use; then it says so and nothing changes).
 - **Catch:** this only helps from the version that includes it. v0.3.3 went out without it, so anyone on v0.3.3 or older installs v0.3.4 by hand one last time.
 
+## Entry 17 — Whole playlists and Drive folders in one go
+*2026-10-28*
+
+- **Problem:** editors often get footage as a YouTube playlist or a shared Google Drive folder. Pluck only took one video at a time, so 12 videos meant pasting 12 links. Pasting a playlist link didn't even work: Pluck tried to look up every video in it first and gave up or got confused.
+- **Decision:** paste a playlist or folder link and Pluck shows a list of its videos, all ticked, with "Select all" / "Select none", one quality for everything and a "Download all (12)" button. No clip step: trimming 12 videos one by one belongs in Premiere.
+- **How it runs:** one video at a time, with "3 of 12" and one bar for the whole batch. Each video is imported as soon as it's done, so Cancel keeps everything finished so far. A video that fails (removed, private) is marked with the reason and skipped; the rest carry on. The end screen says how many were added and lists what failed and why.
+- **Where things go:** files in a folder named after the playlist, inside the usual save folder. In Premiere, a bin of the same name inside "Web Downloads". A whole playlist stays together and doesn't flood the main bin.
+- **Very long lists:** at 200 or more videos Pluck asks first ("That's a lot. It can take hours and fill up your disk."), so a mis-pasted channel-sized playlist doesn't quietly start an all-night download.
+- **What if it's going to take all night?** (the user asked this after the first version, rightly; I had only built "Cancel")
+  - **Time left:** once the first video is done, the panel shows "about 25 min left", based on how fast the batch has gone so far. The 200+ question also says how many hours of video that is.
+  - **Two ways to stop:** "Stop after this video" lets the current one finish and import cleanly; "Cancel now" stops straight away. Both keep everything already done.
+  - **Pick up later instead of pause:** paste the same link again and videos already in that playlist's folder show as "Already downloaded" and start unticked, so the button says "Download the rest (N)". Nothing is downloaded or imported twice. Half-finished pieces from a stopped download don't count as done.
+  - **Why not a real pause button:** a pause would have to survive closing Premiere to be useful. Pick-up-later does that for free, because what's done is simply the files in the folder.
+- **Why one at a time, not several at once:** it's simpler to follow, YouTube is less likely to slow us down, and a failure only affects one video.
+- **A link to one video inside a playlist** (`watch?v=…&list=…`) still means just that video, as before. A channel link is turned away with "open one playlist and copy its link", because a channel is many playlists.
+- **Google Drive surprise #1:** yt-dlp's own Drive-folder reader is broken (an open bug on their side). Pluck now reads the folder's page itself to get the file list, then hands each video to yt-dlp as a normal Drive file. Limits: Google's page lists only the first 50 files, and videos inside subfolders aren't included. Pluck says both.
+- **Google Drive surprise #2:** Drive videos were coming down as Google's small 360p preview (0.5 MB) rather than the file that was uploaded (1.7 MB). Pluck now always takes the original Drive file, so footage arrives at full quality. This also fixes single Drive file links.
+- **Verified on Mac:** real downloads from a public YouTube playlist (Blender's open movies, Creative Commons) and a public Drive folder of Pixabay clips, saved into the right folders; Drive files match the uploaded size exactly. The panel screens (select all/none, the 200+ question, a failing video being skipped, Cancel halfway) were clicked through in a browser with a stand-in for Premiere. A private folder, a folder with only subfolders, and a channel link each show a clear message.
+- **Not verified yet:** the import into the named sub-bin inside a real Premiere, and anything on Windows. Also: if you change "Save to" while looking at a playlist, the "Already downloaded" marks aren't re-checked until you paste the link again.
+
 ---
 
 ## Roadmap (reordered after Entry 7)
