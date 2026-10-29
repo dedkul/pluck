@@ -1,0 +1,37 @@
+name: Report a bug
+description: Something in Pluck didn't work as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, and what did Pluck show? A screenshot helps a lot (drag it in here).
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: The video link you tried
+      placeholder: https://www.youtube.com/watch?v=...
+  - type: input
+    id: pluck
+    attributes:
+      label: Pluck version
+      description: Open Pluck's settings (the gear icon). The version is shown there.
+      placeholder: "0.4.0"
+  - type: input
+    id: premiere
+    attributes:
+      label: Premiere Pro version
+      placeholder: "Premiere Pro 2026 (26.0)"
+  - type: dropdown
+    id: os
+    attributes:
+      label: Computer
+      options:
+        - Mac with Apple chip (M1–M5)
+        - Mac with Intel chip
+        - Windows
+    validations:
+      required: true
